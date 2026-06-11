@@ -271,13 +271,13 @@ fn prefs_from(state: &State, rq: &Request) -> Prefs {
     for hd in rq.headers().iter().filter(|hd| hd.field.equiv("Cookie")) {
         for (k, v) in parse_cookies(hd.value.as_str()) {
             match k.as_str() {
-                "dv_theme" => {
+                "ts_theme" => {
                     if let Some(t) = ThemeMode::from_str(&v) {
                         prefs.theme = t;
                     }
                 }
-                "dv_ln" => prefs.ln = v == "1",
-                "dv_sidebar" => prefs.sidebar = v == "1",
+                "ts_ln" => prefs.ln = v == "1",
+                "ts_sidebar" => prefs.sidebar = v == "1",
                 _ => {}
             }
         }
@@ -318,19 +318,19 @@ fn respond(state: &State, rq: Request) {
 
     // Internal routes (assets + preference cookies).
     match path_raw.as_str() {
-        "/.dv/app.css" => {
+        "/.ts/app.css" => {
             let _ = rq.respond(css_resp(APP_CSS));
             return;
         }
-        "/.dv/syntax-light.css" => {
+        "/.ts/syntax-light.css" => {
             let _ = rq.respond(css_resp(&state.hl.css_light));
             return;
         }
-        "/.dv/syntax-dark.css" => {
+        "/.ts/syntax-dark.css" => {
             let _ = rq.respond(css_resp(&state.hl.css_dark));
             return;
         }
-        "/.dv/set" => {
+        "/.ts/set" => {
             set_prefs(rq, &query);
             return;
         }
@@ -412,7 +412,7 @@ fn respond(state: &State, rq: Request) {
     let _ = rq.respond(html_resp(200, body));
 }
 
-/// `/.dv/set?theme=dark&ln=1&sidebar=0&back=/some/where` — store prefs in
+/// `/.ts/set?theme=dark&ln=1&sidebar=0&back=/some/where` — store prefs in
 /// cookies and bounce back. Pure SSR option switching, no JS.
 fn set_prefs(rq: Request, query: &[(String, String)]) {
     let mut resp = Response::empty(StatusCode(303));
@@ -425,13 +425,13 @@ fn set_prefs(rq: Request, query: &[(String, String)]) {
     for (k, v) in query {
         match k.as_str() {
             "theme" if ThemeMode::from_str(v).is_some() => {
-                resp.add_header(cookie("dv_theme", v));
+                resp.add_header(cookie("ts_theme", v));
             }
             "ln" if v == "0" || v == "1" => {
-                resp.add_header(cookie("dv_ln", v));
+                resp.add_header(cookie("ts_ln", v));
             }
             "sidebar" if v == "0" || v == "1" => {
-                resp.add_header(cookie("dv_sidebar", v));
+                resp.add_header(cookie("ts_sidebar", v));
             }
             _ => {}
         }

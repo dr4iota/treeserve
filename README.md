@@ -1,4 +1,4 @@
-# dirview (working name)
+# treeserve
 
 A single-binary file server in the spirit of `webfsd`, but with server-side
 rendering: directory browsing with a file tree sidebar, syntax-highlighted
@@ -8,13 +8,13 @@ themes. Plain HTML output, zero JavaScript, no runtime dependencies.
 ## Build
 
 ```sh
-cargo build --release        # → target/release/dirview (~3 MB static-ish binary)
+cargo build --release        # → target/release/treeserve (~3 MB static-ish binary)
 ```
 
 ## Usage
 
 ```
-dirview [OPTIONS] [ROOT]
+treeserve [OPTIONS] [ROOT]
 
   -b, --bind ADDR        address to bind (default: 127.0.0.1)
   -p, --port PORT        port to listen on (default: 8080)
@@ -34,13 +34,13 @@ All ~30 highlighting themes (Dracula, Nord, Solarized, Catppuccin, gruvbox, …)
 are embedded in the binary and selectable at run time; names are matched
 case- and punctuation-insensitively (`one-half-dark` == `OneHalfDark`).
 
-Example: `dirview -p 9000 ~/projects/notes`
+Example: `treeserve -p 9000 ~/projects/notes`
 
 ## Features
 
 - **Server-side rendering, zero JS.** Every page is plain HTML + CSS.
   Toggles (theme, line numbers, sidebar) are links that set a cookie via
-  `/.dv/set` and redirect back.
+  `/.ts/set` and redirect back.
 - **File tree sidebar.** Rendered on the server; directories on the current
   path are expanded, everything else is a link, so no JS is needed for
   expansion. Toggle with “Tree” in the header.

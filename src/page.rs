@@ -97,7 +97,7 @@ fn icon_for(name: &str, is_dir: bool) -> &'static str {
 }
 
 fn set_href(key: &str, val: &str, back: &str) -> String {
-    format!("/.dv/set?{}={}&back={}", key, val, percent_encode(back))
+    format!("/.ts/set?{}={}&back={}", key, val, percent_encode(back))
 }
 
 /// Full page shell. `rel` is the current path segments, `url_now` the raw
@@ -123,12 +123,12 @@ pub fn layout(
     };
     let syntax_css = match prefs.theme {
         ThemeMode::Auto => concat!(
-            "<link rel=\"stylesheet\" href=\"/.dv/syntax-light.css\" media=\"(prefers-color-scheme: light)\">",
-            "<link rel=\"stylesheet\" href=\"/.dv/syntax-dark.css\" media=\"(prefers-color-scheme: dark)\">"
+            "<link rel=\"stylesheet\" href=\"/.ts/syntax-light.css\" media=\"(prefers-color-scheme: light)\">",
+            "<link rel=\"stylesheet\" href=\"/.ts/syntax-dark.css\" media=\"(prefers-color-scheme: dark)\">"
         )
         .to_string(),
-        ThemeMode::Light => "<link rel=\"stylesheet\" href=\"/.dv/syntax-light.css\">".to_string(),
-        ThemeMode::Dark => "<link rel=\"stylesheet\" href=\"/.dv/syntax-dark.css\">".to_string(),
+        ThemeMode::Light => "<link rel=\"stylesheet\" href=\"/.ts/syntax-light.css\">".to_string(),
+        ThemeMode::Dark => "<link rel=\"stylesheet\" href=\"/.ts/syntax-dark.css\">".to_string(),
     };
 
     // Breadcrumbs
@@ -190,7 +190,7 @@ pub fn layout(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#x1F4C1;</text></svg>">
-<link rel="stylesheet" href="/.dv/app.css">
+<link rel="stylesheet" href="/.ts/app.css">
 {syntax_css}
 </head>
 <body>
