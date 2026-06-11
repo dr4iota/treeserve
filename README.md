@@ -24,7 +24,15 @@ dirview [OPTIONS] [ROOT]
       --hidden           show dotfiles
       --title NAME       site title (default: root directory name)
       --threads N        worker threads (default: 8)
+      --syntax-theme NAME        highlighting theme for both modes
+      --syntax-theme-light NAME  highlighting theme for light mode (default: InspiredGitHub)
+      --syntax-theme-dark NAME   highlighting theme for dark mode (default: OneHalfDark)
+      --list-syntax-themes       list embedded highlighting themes and exit
 ```
+
+All ~30 highlighting themes (Dracula, Nord, Solarized, Catppuccin, gruvbox, …)
+are embedded in the binary and selectable at run time; names are matched
+case- and punctuation-insensitively (`one-half-dark` == `OneHalfDark`).
 
 Example: `dirview -p 9000 ~/projects/notes`
 

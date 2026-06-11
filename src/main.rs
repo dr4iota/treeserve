@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::thread;
 
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
+use two_face::theme::EmbeddedThemeName;
 
 use hl::Hl;
 use page::{Prefs, ThemeMode};
@@ -30,6 +31,8 @@ pub struct Config {
     pub sidebar: bool,
     pub show_hidden: bool,
     pub threads: usize,
+    pub syn_light: EmbeddedThemeName,
+    pub syn_dark: EmbeddedThemeName,
 }
 
 pub struct State {
@@ -57,6 +60,14 @@ OPTIONS:
         --hidden           show dotfiles
         --title NAME       site title (default: root directory name)
         --threads N        worker threads (default: 8)
+        --syntax-theme NAME
+                           highlighting theme for both light and dark mode
+        --syntax-theme-light NAME
+                           highlighting theme for light mode (default: InspiredGitHub)
+        --syntax-theme-dark NAME
+                           highlighting theme for dark mode (default: OneHalfDark)
+        --list-syntax-themes
+                           list embedded highlighting themes and exit
     -h, --help             print this help
     -V, --version          print version
 ",
@@ -75,6 +86,8 @@ fn parse_args() -> Config {
     let mut show_hidden = false;
     let mut title: Option<String> = None;
     let mut threads: usize = 8;
+    let mut syn_light = EmbeddedThemeName::InspiredGithub;
+    let mut syn_dark = EmbeddedThemeName::OneHalfDark;
 
     let mut args = std::env::args().skip(1);
     let die = |msg: &str| -> ! {
@@ -119,6 +132,29 @@ fn parse_args() -> Config {
                     .filter(|&n| n > 0)
                     .unwrap_or_else(|| die("--threads needs a positive number"));
             }
+            "--syntax-theme" | "--syntax-theme-light" | "--syntax-theme-dark" => {
+                let v = args
+                    .next()
+                    .unwrap_or_else(|| die(&format!("{} needs a theme name", a)));
+                let t = hl::find_theme(&v).unwrap_or_else(|| {
+                    die(&format!(
+                        "unknown theme {:?}; see --list-syntax-themes",
+                        v
+                    ))
+                });
+                if a != "--syntax-theme-dark" {
+                    syn_light = t;
+                }
+                if a != "--syntax-theme-light" {
+                    syn_dark = t;
+                }
+            }
+            "--list-syntax-themes" => {
+                for name in hl::theme_names() {
+                    println!("{}", name);
+                }
+                exit(0);
+            }
             _ if a.starts_with('-') => die(&format!("unknown option: {}", a)),
             _ => {
                 if root.is_some() {
@@ -154,6 +190,8 @@ fn parse_args() -> Config {
         sidebar,
         show_hidden,
         threads,
+        syn_light,
+        syn_dark,
     }
 }
 
@@ -173,7 +211,8 @@ fn main() {
     );
 
     let threads = cfg.threads;
-    let state = Arc::new(State { cfg, hl: Hl::new() });
+    let hl = Hl::new(cfg.syn_light, cfg.syn_dark);
+    let state = Arc::new(State { cfg, hl });
     let server = Arc::new(server);
 
     let mut handles = Vec::new();

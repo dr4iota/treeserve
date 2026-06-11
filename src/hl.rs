@@ -1,7 +1,7 @@
 use syntect::html::{css_for_theme_with_class_style, ClassStyle, ClassedHTMLGenerator};
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 use syntect::util::LinesWithEndings;
-use two_face::theme::EmbeddedThemeName;
+use two_face::theme::{EmbeddedLazyThemeSet, EmbeddedThemeName};
 
 /// All generated span classes are prefixed so they cannot collide with page CSS.
 /// The generated theme CSS targets the container class ".hl-code".
@@ -13,16 +13,37 @@ pub struct Hl {
     pub css_dark: String,
 }
 
+/// All themes are embedded in the binary by two-face and lazily
+/// deserialized, so any of them can be selected at run time.
+pub fn theme_names() -> impl Iterator<Item = &'static str> {
+    EmbeddedLazyThemeSet::theme_names()
+        .iter()
+        .map(|t| t.as_name())
+}
+
+/// Case/punctuation-insensitive lookup: "one-half-dark" == "OneHalfDark".
+pub fn find_theme(input: &str) -> Option<EmbeddedThemeName> {
+    let norm = |s: &str| -> String {
+        s.chars()
+            .filter(char::is_ascii_alphanumeric)
+            .map(|c| c.to_ascii_lowercase())
+            .collect()
+    };
+    let want = norm(input);
+    EmbeddedLazyThemeSet::theme_names()
+        .iter()
+        .copied()
+        .find(|t| norm(t.as_name()) == want)
+}
+
 impl Hl {
-    pub fn new() -> Hl {
+    pub fn new(light: EmbeddedThemeName, dark: EmbeddedThemeName) -> Hl {
         let ss = two_face::syntax::extra_newlines();
         let themes = two_face::theme::extra();
-        let css_light =
-            css_for_theme_with_class_style(themes.get(EmbeddedThemeName::InspiredGithub), CLASS_STYLE)
-                .expect("light theme css");
+        let css_light = css_for_theme_with_class_style(themes.get(light), CLASS_STYLE)
+            .expect("light theme css");
         let css_dark =
-            css_for_theme_with_class_style(themes.get(EmbeddedThemeName::OneHalfDark), CLASS_STYLE)
-                .expect("dark theme css");
+            css_for_theme_with_class_style(themes.get(dark), CLASS_STYLE).expect("dark theme css");
         Hl { ss, css_light, css_dark }
     }
 
