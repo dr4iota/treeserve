@@ -198,25 +198,35 @@ cargo run -p treesight -- [FOLDER]     # dev run
   exactly as in a browser. Because any local process could otherwise reach that
   port, the server runs with a per-run token: the window's first navigation
   exchanges it for a cookie via `/.ts/auth`, and requests without it get 403.
-- **The left pane is the folder chooser**, so choosing one looks the same on
+- **The left pane is also the folder chooser**, so choosing one looks the same on
   every platform — which the native dialogs do not, GTK offering *Other
-  Locations* where Windows offers *Quick access* and no tree at all:
-  **Places** (home, desktop, documents, downloads, and drive letters or `/`),
-  **Recent** (the last 8 roots, kept in `recent.txt` in the app's config dir),
-  the tree, and **Open Folder…** at the bottom for the native picker when you
-  would rather browse. Places never feed Recent: that list is fixed, and a
-  shortcut copying itself into the list below it would say nothing new.
-  Turning the tree off with **Tree** leaves the rest of the pane in place.
-- **The path bar** in the header serves whatever folder you type, `~` included,
-  and shows the current root the rest of the time. Re-rooting also happens by
-  dropping a folder on the window, and a second launch re-roots this window
-  rather than starting a second copy.
-- **No menu bar.** A Tauri window has no browser chrome, so Back and Forward are
-  the two buttons next to the path bar, and the shortcuts are
+  Locations* where Windows offers *Quick access* and no tree at all. The tree
+  has the pane to itself; scroll past it for **Places** (home, desktop,
+  documents, downloads, and drive letters or `/`) and **Recent** (the last 8
+  roots, kept in `recent.txt` in the app's config dir), which is where
+  shortcuts reached for now and then belong. Places never feed Recent: that
+  list is fixed, and a shortcut copying itself into the list below it would say
+  nothing new. Re-rooting also happens by dropping a folder on the window, and a
+  second launch re-roots this window rather than starting a second copy.
+- **One line of chrome, not two.** No menu bar — those were rarely-used menus
+  holding a permanent row — and no browser-style location bar either. Back
+  shares the header with the path and the flags, and the shortcuts are
   `Alt+←` / `Alt+→` (back, forward), `Ctrl+R` (reload), `Ctrl+Home` (top of
   tree) and `Ctrl+O` (folder picker). On macOS a menu is also where `Cmd+Q` and
   the clipboard shortcuts come from, so that platform needs its own menu back
   before it is worth shipping there.
+- **Nothing gets a row it does not earn.** Every control spells itself out while
+  there is room and falls back to a symbol when there is not, and the pane
+  narrows and then goes as the window does — so **Open Folder…** lives in the
+  status line rather than the pane, being the one line that is always there.
+  Its folder is drawn as SVG rather than typed: folder characters live in the
+  emoji planes, and a Linux font stack with none of them draws a
+  missing-glyph box.
+- **One screen, three regions.** The shell lays itself out as an app rather than
+  as a long document: the header and the status line stay where they are, and
+  the sidebar and the listing scroll independently, so following a deep tree
+  never scrolls the file you are reading off the top. A page in a browser keeps
+  scrolling like a page, which is what a browser's own chrome expects.
 - **Downloads** don't go through the webview's download stack, which is invisible
   on some platforms and missing on others. A `?dl=1` link is intercepted, the URL
   is resolved back to its file with the server's own traversal checks, and a
@@ -234,17 +244,21 @@ that true:
 - `Config::app_ui` decides whether they are rendered at all. It defaults to
   `false`, `treesight` is the only thing that sets it, and there is no CLI flag
   to turn it on — a flag plus `--bind 0.0.0.0` would be a remote filesystem
-  browser with a text box in it.
+  browser in someone else's filesystem.
 - The controls do nothing on their own. They are ordinary links to `/.ts/open`,
-  `/.ts/root`, `/.ts/place`, `/.ts/back` and `/.ts/forward`, and **none of those
-  is a server route**: `treeserve` never re-roots itself over HTTP and answers
-  404 for all five. The desktop shell recognises them in its navigation handler
-  and cancels the navigation, the same way it already intercepts `?dl=1`
-  downloads. The capability lives in the one client allowed to have it.
+  `/.ts/root`, `/.ts/place` and `/.ts/back`, and **none of those is a server
+  route**: `treeserve` never re-roots itself over HTTP and answers 404 for all
+  four. The desktop shell recognises them in its navigation handler and cancels
+  the navigation, the same way it already intercepts `?dl=1` downloads. The
+  capability lives in the one client allowed to have it.
 
-A page served by the CLI is therefore byte-for-byte what it was before this
-existed, still with no JavaScript in it. The shell does inject a small keydown
-handler for the shortcuts, since it has no menu to carry accelerators.
+A page served by the CLI therefore carries none of it — no back button, no
+Places, no Recent, no picker, and still no JavaScript. What it does share is the
+header flags, which now carry a symbol alongside their words for narrow windows.
+The one-screen layout it does not: the shell turns that on with a class on
+`<body>`, rather than imposing it on a page in a browser. The shell also injects
+a small keydown handler for the shortcuts, since it has no menu to carry
+accelerators.
 
 ### Windows Explorer integration
 

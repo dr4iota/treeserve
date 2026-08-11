@@ -100,6 +100,34 @@ fn set_href(key: &str, val: &str, back: &str) -> String {
     format!("/.ts/set?{}={}&back={}", key, val, percent_encode(back))
 }
 
+/// A control that spells itself out when there is room and shrinks to a symbol
+/// when there is not. `icon` is raw markup: a character reference, or the folder
+/// drawn below, since no font can be relied on for that one.
+fn flag(class: &str, href: &str, icon: &str, label: &str, title: &str) -> String {
+    let class = if class.is_empty() {
+        String::new()
+    } else {
+        format!(" class=\"{class}\"")
+    };
+    format!(
+        "<a{} href=\"{}\" title=\"{}\"><span class=\"ico\">{}</span><span class=\"lbl\">{}</span></a>",
+        class,
+        html_escape(href),
+        html_escape(title),
+        icon,
+        html_escape(label)
+    )
+}
+
+/// A folder, drawn rather than typed. Every folder character is in the emoji
+/// planes, and a Linux font stack that has none of them shows a missing-glyph
+/// box instead — which is the whole problem with an icon for this.
+const FOLDER_SVG: &str = concat!(
+    "<svg viewBox=\"0 0 16 16\" width=\"13\" height=\"13\" aria-hidden=\"true\">",
+    "<path fill=\"currentColor\" d=\"M1.5 2.5h3.9l1.3 1.6h7.8c.6 0 1 .4 1 1v7.4c0 .6-.4 1-1 1H1.5",
+    "c-.6 0-1-.4-1-1V3.5c0-.6.4-1 1-1z\"/></svg>"
+);
+
 /// Full page shell. `rel` is the current path segments, `url_now` the raw
 /// (still percent-encoded) path+query of this request, used for toggles.
 pub fn layout(
@@ -152,50 +180,56 @@ pub fn layout(
     let mut controls = String::from(extra_controls);
     if show_ln_toggle {
         let (label, val) = if prefs.ln { ("Ln: on", "0") } else { ("Ln: off", "1") };
-        controls.push_str(&format!(
-            "<a href=\"{}\">{}</a>",
-            html_escape(&set_href("ln", val, url_now)),
-            label
-        ));
+        controls.push_str(&flag("", &set_href("ln", val, url_now), "#", label, "Line numbers"));
     }
     let (tree_label, tree_val) = if prefs.sidebar {
         ("Tree: on", "0")
     } else {
         ("Tree: off", "1")
     };
-    controls.push_str(&format!(
-        "<a href=\"{}\">{}</a>",
-        html_escape(&set_href("sidebar", tree_val, url_now)),
-        tree_label
+    controls.push_str(&flag(
+        "",
+        &set_href("sidebar", tree_val, url_now),
+        "&#x2630;", // trigram for heaven, i.e. the usual list glyph
+        tree_label,
+        // Says what the symbol is for, since at narrow widths it is all there
+        // is to go on.
+        "File tree",
     ));
-    controls.push_str(&format!(
-        "<a href=\"{}\" title=\"Cycle theme\">Theme: {}</a>",
-        html_escape(&set_href("theme", prefs.theme.next().as_str(), url_now)),
-        prefs.theme.as_str()
+    controls.push_str(&flag(
+        "",
+        &set_href("theme", prefs.theme.next().as_str(), url_now),
+        "&#x25D0;", // half-filled circle
+        &format!("Theme: {}", prefs.theme.as_str()),
+        "Cycle theme",
     ));
 
-    // The desktop shell's own chrome. Both of these are inert here — the shell
-    // intercepts the links; this server has no route for them.
-    // Leading newline rather than a line of its own in the template, so a page
-    // served without the shell keeps exactly the bytes it had before.
-    let appnav = if state.cfg.app_ui {
+    // The shell's own chrome, and all of it: one button on the line the path and
+    // the flags already had, rather than a browser-style row of its own. Both
+    // links are inert here — the shell intercepts them, and this server has no
+    // route for either.
+    let back = if state.cfg.app_ui {
         format!(
-            concat!(
-                "\n  <div class=\"appnav\">",
-                "<a class=\"navbtn\" href=\"/.ts/back\" title=\"Back (Alt+Left)\">&#x2190;</a>",
-                "<a class=\"navbtn\" href=\"/.ts/forward\" title=\"Forward (Alt+Right)\">&#x2192;</a>",
-                "<form class=\"pathbar\" action=\"/.ts/root\" method=\"get\">",
-                "<input name=\"path\" value=\"{root}\" spellcheck=\"false\" ",
-                "aria-label=\"Folder to serve\" title=\"Type a folder to serve\">",
-                "<button>Go</button>",
-                "</form>",
-                "</div>"
-            ),
-            root = html_escape(&display_path(&state.cfg.root()))
+            "\n  {}",
+            flag("back", "/.ts/back", "&#x2190;", "Back", "Back (Alt+Left)")
         )
     } else {
         String::new()
     };
+    // The picker lives in the status line, which is always on screen — the pane
+    // that used to hold it is the first thing to go when the window narrows.
+    let pick = if state.cfg.app_ui {
+        flag(
+            "pick",
+            "/.ts/open",
+            FOLDER_SVG,
+            "Open Folder…",
+            "Open Folder… (Ctrl+O)",
+        )
+    } else {
+        String::new()
+    };
+    let body_class = if state.cfg.app_ui { " class=\"app\"" } else { "" };
 
     // In the shell the pane also holds Places, Recent and the picker button, so
     // it stays even with the tree off; served on its own it is the tree or
@@ -218,8 +252,8 @@ pub fn layout(
 <link rel="stylesheet" href="/.ts/math.css">
 {syntax_css}
 </head>
-<body>
-<header>{appnav}
+<body{body_class}>
+<header>{back}
   <div class="crumbs">{crumbs}</div>
   <div class="controls">{controls}</div>
 </header>
@@ -236,16 +270,18 @@ pub fn layout(
         data_theme = data_theme,
         title = html_escape(&title),
         syntax_css = syntax_css,
-        appnav = appnav,
+        body_class = body_class,
+        back = back,
         crumbs = crumbs,
         controls = controls,
         sidebar = sidebar,
         content = content,
         footer = format!(
-            "{} v{} &middot; {}",
+            "<span class=\"where\">{} v{} &middot; {}</span>{}",
             env!("CARGO_PKG_NAME"),
             env!("CARGO_PKG_VERSION"),
-            html_escape(&display_path(&state.cfg.root()))
+            html_escape(&display_path(&state.cfg.root())),
+            pick
         ),
     )
 }
@@ -259,7 +295,14 @@ const TREE_MAX_PER_DIR: usize = 150;
 /// stylesheet rule still hides the whole pane on narrow screens.
 fn pane_html(state: &State, prefs: Prefs, cur: &[String]) -> String {
     let mut out = String::from("<nav class=\"tree\">");
+    // The tree first and foremost: it is what the pane is for, and it is what
+    // grows, so it takes the height and the shortcuts below settle for what is
+    // left.
+    if prefs.sidebar {
+        tree_dir(state, &state.cfg.root(), &mut Vec::new(), cur, &mut out);
+    }
     if state.cfg.app_ui {
+        out.push_str("<div class=\"chooser\">");
         // Two paths on purpose: opening a Place is not something Recent should
         // collect, or the fixed list would keep copying itself into the other
         // one. Opening something from Recent does move it back to the top.
@@ -277,15 +320,7 @@ fn pane_html(state: &State, prefs: Prefs, cur: &[String]) -> String {
             "/.ts/root",
             state.cfg.recent().iter().map(|p| (root_label(p), p.clone())),
         );
-    }
-    if prefs.sidebar {
-        tree_dir(state, &state.cfg.root(), &mut Vec::new(), cur, &mut out);
-    }
-    if state.cfg.app_ui {
-        out.push_str(
-            "<a class=\"pick\" href=\"/.ts/open\" title=\"Open Folder… (Ctrl+O)\">\
-             Open Folder&hellip;</a>",
-        );
+        out.push_str("</div>");
     }
     out.push_str("</nav>");
     out

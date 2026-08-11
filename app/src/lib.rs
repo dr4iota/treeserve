@@ -313,22 +313,18 @@ fn percent_decode(s: &str) -> String {
 }
 
 /// Handles the page's own controls, which are links rather than script: the
-/// picker button, the history buttons, and everything that re-roots (Places,
-/// Recent, the path bar). Returns whether the navigation was one of ours and
-/// should therefore be cancelled.
+/// back button, the picker button, and the two lists that re-root. Returns
+/// whether the navigation was one of ours and should therefore be cancelled.
 fn shell_action(app: &AppHandle, url: &tauri::Url) -> bool {
     match url.path() {
         "/.ts/open" => ask_for_folder(app.clone(), false),
         "/.ts/back" => eval(app, "history.back()"),
-        "/.ts/forward" => eval(app, "history.forward()"),
-        // Recent and the path bar; a Place is the same but not worth
-        // remembering, since the pane already lists it.
+        // Recent; a Place is the same but not worth remembering, since the pane
+        // already lists it. Both carry a path we rendered ourselves, though
+        // `open_root` still checks it — a remembered folder can go away.
         "/.ts/root" | "/.ts/place" => match url.query_pairs().find(|(k, _)| k == "path") {
-            // A typed path may start with a `~` no shell has expanded, and may
-            // name something that is not there at all, hence the fixing up and
-            // the check inside `open_root`.
             Some((_, path)) => {
-                let dir = expand_home(app, path.trim());
+                let dir = PathBuf::from(path.trim());
                 open_root(app, dir, url.path() == "/.ts/root");
             }
             None => fail(app, "No folder in that link.", false),
@@ -341,18 +337,6 @@ fn shell_action(app: &AppHandle, url: &tauri::Url) -> bool {
 fn eval(app: &AppHandle, js: &str) {
     if let Some(w) = app.get_webview_window(WINDOW) {
         let _ = w.eval(js);
-    }
-}
-
-/// `~` and `~/…` mean the home directory, as everywhere else.
-fn expand_home(app: &AppHandle, path: &str) -> PathBuf {
-    let Ok(home) = app.path().home_dir() else {
-        return PathBuf::from(path);
-    };
-    match path.strip_prefix('~') {
-        Some("") => home,
-        Some(rest) if rest.starts_with('/') || rest.starts_with('\\') => home.join(&rest[1..]),
-        _ => PathBuf::from(path),
     }
 }
 
