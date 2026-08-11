@@ -51,8 +51,22 @@ Example: `treeserve -p 9000 ~/projects/notes`
   through two-face), with a line-number gutter that can be toggled per user
   or disabled by default with `--no-line-numbers`.
 - **Markdown** rendered server-side by comrak (GFM: tables, task lists,
-  strikethrough, autolinks, footnotes). Fenced code blocks go through the
-  same syntect pipeline. A “Source” link shows the highlighted raw file.
+  strikethrough, autolinks, tag filtering, plus GitHub's footnotes, alerts
+  and heading anchors). Fenced code blocks go through the same syntect
+  pipeline. A “Source” link shows the highlighted raw file.
+- **Math.** `$x$` and `\(x\)` inline; `$$x$$`, `\[x\]` and ```` ```math ````
+  blocks for display math — the union of what GitHub and KaTeX accept. The
+  LaTeX-native `\(…\)`/`\[…\]` pairs are rewritten to the dollar forms before
+  parsing (CommonMark would otherwise eat the backslashes as escapes); code
+  spans and fenced blocks are left alone, and an opener with no partner in the
+  same paragraph stays literal text. Formulas are typeset on the server:
+  pulldown-latex converts
+  the LaTeX to MathML, so formulas render as text in the browser with no
+  JavaScript and no webfont download. Formulas that don't parse are shown in
+  red with the parser message as a tooltip. Escape a literal dollar sign as
+  `\$`. Rendering quality depends on the browser having a math font
+  (Cambria Math on Windows, Latin Modern/STIX/DejaVu Math on Linux,
+  built into Firefox); without one, the browser's default math layout is used.
 - **Dark / light / auto themes.** Highlighting is emitted as CSS classes;
   one stylesheet per theme is generated at startup, so theme switching is
   pure CSS (`prefers-color-scheme` in auto mode, cookie override otherwise).
@@ -74,5 +88,6 @@ Example: `treeserve -p 9000 ~/projects/notes`
 ## Direct dependencies
 
 `tiny_http` (sync HTTP server), `syntect` + `two-face` (highlighting),
-`comrak` (Markdown). Everything else — argument parsing, URL handling,
-templating, glob matching — is hand-rolled std-only Rust.
+`comrak` (Markdown), `pulldown-latex` (LaTeX → MathML). Everything else —
+argument parsing, URL handling, templating, glob matching — is hand-rolled
+std-only Rust.

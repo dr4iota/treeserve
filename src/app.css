@@ -7,6 +7,12 @@
   --bg-subtle: #f6f8fa;
   --accent: #0969da;
   --mark: #fff8c5;
+  --err: #cf222e;
+  --note: #0969da;
+  --tip: #1a7f37;
+  --important: #8250df;
+  --warning: #9a6700;
+  --caution: #cf222e;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -29,6 +35,12 @@
   --bg-subtle: #151b23;
   --accent: #4493f8;
   --mark: #5a4a00;
+  --err: #ff7b72;
+  --note: #4493f8;
+  --tip: #3fb950;
+  --important: #ab7df8;
+  --warning: #d29922;
+  --caution: #f85149;
 }
 
 * { box-sizing: border-box; }
@@ -160,7 +172,7 @@ form.filter button:hover { border-color: var(--accent); color: var(--accent); }
 }
 
 /* Markdown body */
-.md { max-width: 52rem; }
+.md { max-width: 52rem; counter-reset: eq-number; }
 .md h1, .md h2 { border-bottom: 1px solid var(--border); padding-bottom: .3rem; }
 .md h1 { font-size: 1.7rem; }
 .md h2 { font-size: 1.35rem; }
@@ -199,6 +211,42 @@ form.filter button:hover { border-color: var(--accent); color: var(--accent); }
 .md hr { border: none; border-top: 1px solid var(--border); }
 .md mark { background: var(--mark); }
 .md input[type="checkbox"] { accent-color: var(--accent); }
+
+/* GFM task lists: checkbox replaces the bullet. */
+.md ul.contains-task-list { padding-left: 1.2rem; }
+.md li.task-list-item { list-style: none; }
+.md li.task-list-item > input[type="checkbox"] { margin: 0 .35em 0 -1.2em; }
+
+/* GitHub alerts: > [!NOTE] and friends. */
+.md .markdown-alert {
+  margin: 1rem 0;
+  padding: .5rem 1rem;
+  border-left: .25em solid var(--border);
+  color: var(--fg);
+}
+.md .markdown-alert > :first-child { margin-top: 0; }
+.md .markdown-alert > :last-child { margin-bottom: 0; }
+.md .markdown-alert-title { font-weight: 600; color: inherit; }
+.md .markdown-alert-note { border-left-color: var(--note); }
+.md .markdown-alert-note .markdown-alert-title { color: var(--note); }
+.md .markdown-alert-tip { border-left-color: var(--tip); }
+.md .markdown-alert-tip .markdown-alert-title { color: var(--tip); }
+.md .markdown-alert-important { border-left-color: var(--important); }
+.md .markdown-alert-important .markdown-alert-title { color: var(--important); }
+.md .markdown-alert-warning { border-left-color: var(--warning); }
+.md .markdown-alert-warning .markdown-alert-title { color: var(--warning); }
+.md .markdown-alert-caution { border-left-color: var(--caution); }
+.md .markdown-alert-caution .markdown-alert-title { color: var(--caution); }
+
+/* Footnotes */
+.md section.footnotes {
+  border-top: 1px solid var(--border);
+  margin-top: 2rem;
+  font-size: .9em;
+  color: var(--muted);
+}
+.md .footnote-ref { text-decoration: none; }
+.md .footnote-backref { text-decoration: none; }
 
 /* Media views */
 .preview-img {

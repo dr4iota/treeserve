@@ -1,0 +1,155 @@
+/* MathML styling for the server-rendered math from pulldown-latex.
+ *
+ * Derived from pulldown-latex's styles.css (MIT, Copyright 2024 Charles
+ * Edward Gagnon), with the bundled webfonts replaced by locally installed
+ * fonts plus the CSS `math` generic family, and colors switched to
+ * currentColor / theme variables so both light and dark modes work.
+ */
+
+math {
+  font-family: "Latin Modern Math", "STIX Two Math", "XITS Math",
+    "Cambria Math", "TeX Gyre Termes Math", math, serif;
+  font-size: 1.05em;
+}
+math mtext {
+  font-family: "Latin Modern Roman", "TeX Gyre Termes", Georgia, serif;
+}
+
+/* Display math gets its own centered line and scrolls sideways instead of
+ * widening the page. The wrapper spans the text column so that equation
+ * numbers — absolutely positioned by the rules below — land at its right edge,
+ * while the formula itself is centered as an inline box. */
+.math-block {
+  position: relative;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+  margin: 1em 0;
+  padding: .15em 0;
+}
+.math-block:has(mtable.menv-with-eqn) {
+  padding-right: 3.5em;
+}
+.math-block > math[display="block"] {
+  display: inline math;
+  text-align: left;
+  margin: 0;
+}
+/* Fallback when display math ends up inline (mixed into a paragraph). */
+math[display="block"] {
+  max-width: 100%;
+}
+
+/* MathML layout fixes carried over from pulldown-latex. */
+mtd {
+  padding-left: 0;
+  padding-right: 0;
+}
+mo.small {
+  font-size: 70%;
+}
+mtable {
+  border-color: currentColor;
+  border-spacing: 0;
+  border-collapse: collapse;
+}
+mtr:last-child > mtd:empty:only-child {
+  display: none;
+}
+mtr:last-child:has(> mtd:empty)::after {
+  display: none;
+}
+mtable.menv-alignlike > mtr > mtd:nth-child(odd),
+mtable.menv-cells-right > mtr > mtd,
+mtable.menv-multline > mtr > mtd:last-child,
+mtd.cell-right {
+  text-align: right;
+}
+mtable.menv-alignlike > mtr > mtd:nth-child(even),
+mtable.menv-cells-left > mtr > mtd,
+mtable.menv-multline > mtr > mtd:first-child,
+mtd.cell-left {
+  text-align: left;
+}
+mtable.menv-multline > mtr > mtd {
+  width: 100%;
+}
+mtable.menv-align > mtr > mtd:nth-child(2n + 3) {
+  padding-left: 1em;
+}
+mtable.menv-cases > mtr > mtd:first-child {
+  padding-right: 1em;
+}
+mtable.menv-arraylike > mtr > mtd {
+  padding-left: 0.4em;
+  padding-right: 0.4em;
+}
+mtable.menv-matrix > mtr > mtd:first-child {
+  padding-left: 0;
+}
+mtable.menv-matrix > mtr > mtd:last-child {
+  padding-right: 0;
+}
+mtable.menv-with-eqn > mtr:not(:has(> mtd.menv-nonumber)) {
+  counter-increment: eq-number;
+}
+mtable.menv-with-eqn > mtr:not(:has(> mtd.menv-nonumber))::after {
+  position: absolute;
+  right: 0;
+  padding: 0 0.4em;
+  content: "(" counter(eq-number) ")";
+}
+mo.mop-negated {
+  background: linear-gradient(to top left, transparent 0%,
+    transparent calc(50% - 0.8px), currentColor 50%,
+    transparent calc(50% + 0.8px), transparent 100%);
+}
+mtd.menv-left-solid {
+  border-left: 0.06em solid;
+}
+mtd.menv-right-solid {
+  border-right: 0.06em solid;
+}
+mtd.menv-left-dashed {
+  border-left: 0.06em dashed;
+}
+mtd.menv-right-dashed {
+  border-right: 0.06em dashed;
+}
+mtr.menv-hline {
+  border-top: 0.06em solid;
+}
+mtr.menv-hdashline {
+  border-top: 0.06em dashed;
+}
+mtr.menv-hline > mtd.menv-nonumber:only-child,
+mtr.menv-hdashline:empty > mtd.menv-nonumber:only-child {
+  padding-top: 0.1em;
+  padding-bottom: 0;
+}
+mtd.menv-border-only:empty {
+  width: 0.1em;
+  padding: 0;
+  margin: 0;
+}
+
+/* Parse errors. Bad formulas are caught before rendering and shown as
+ * code.math-error; merror is styled too in case the renderer emits one. */
+merror {
+  background: none;
+  border: 1px solid var(--err, #b22222);
+  border-radius: 4px;
+  color: var(--err, #b22222);
+}
+merror > mtext {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .8em;
+  white-space-collapse: preserve;
+  display: block;
+  text-align: left;
+}
+code.math-error {
+  color: var(--err, #b22222);
+  border-color: var(--err, #b22222);
+  cursor: help;
+}

@@ -191,6 +191,7 @@ pub fn layout(
 <title>{title}</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#x1F4C1;</text></svg>">
 <link rel="stylesheet" href="/.ts/app.css">
+<link rel="stylesheet" href="/.ts/math.css">
 {syntax_css}
 </head>
 <body>

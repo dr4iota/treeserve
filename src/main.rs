@@ -20,6 +20,7 @@ use page::{Prefs, ThemeMode};
 use util::*;
 
 const APP_CSS: &str = include_str!("app.css");
+const MATH_CSS: &str = include_str!("math.css");
 
 pub struct Config {
     pub root: PathBuf, // canonicalized
@@ -320,6 +321,10 @@ fn respond(state: &State, rq: Request) {
     match path_raw.as_str() {
         "/.ts/app.css" => {
             let _ = rq.respond(css_resp(APP_CSS));
+            return;
+        }
+        "/.ts/math.css" => {
+            let _ = rq.respond(css_resp(MATH_CSS));
             return;
         }
         "/.ts/syntax-light.css" => {
