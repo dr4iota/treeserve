@@ -16,9 +16,18 @@ categories = ["command-line-utilities", "web-programming::http-server"]
 [dependencies]
 comrak = { version = "0.52.0", default-features = false }
 pulldown-latex = "0.8.0"
-syntect = "5.3.0"
+syntect = { version = "5.3.0", default-features = false }
 tiny_http = "0.12.0"
-two-face = "0.5.1"
+two-face = { version = "0.5.1", default-features = false }
+
+[features]
+default = ["onig"]
+# Highlighting regex engine. `onig` is oniguruma, a C library built by cc:
+# roughly twice as fast and a smaller binary, and the default. `pure` swaps in
+# fancy-regex so the whole dependency tree is Rust, which is what makes static
+# musl builds and cross-compilation painless. Output is identical either way.
+onig = ["syntect/default-onig", "two-face/syntect-onig"]
+pure = ["syntect/default-fancy", "two-face/syntect-fancy"]
 
 [profile.release]
 lto = true

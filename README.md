@@ -10,8 +10,14 @@ themes. Plain HTML output, zero JavaScript, no runtime dependencies.
 ```sh
 ./build.sh            # or build.bat on Windows → dist/treeserve, dist/treesight
 ./build.sh server     # just the server, no webview libraries needed
+./build.sh static     # server as one fully static file (musl, no libc)
+./build.sh install    # copy dist/* to ~/bin    (PREFIX=… to override)
 ./build.sh bundle     # also the installers (needs cargo-tauri, see below)
 ```
+
+On Windows, `build.bat install` copies to `C:\WinApps` (set `TREE_PREFIX` to
+override). Both scripts print what they produced and warn when the destination
+is not on your `PATH`.
 
 Two crates, two binaries:
 
@@ -30,6 +36,39 @@ references no external host, so nothing is fetched at run time — no CDN, no
 webfonts, no telemetry. The only network access is at build time: `cargo`
 fetching crates, and, for `build.sh bundle`, the Tauri bundler fetching its
 NSIS/AppImage tooling and the WebView2 runtime (see below).
+
+## Portable binaries
+
+Both binaries are single files with everything compiled in — no data directory,
+no config file, nothing fetched at run time. How portable each one is depends
+only on what it links against:
+
+| | portability |
+|---|---|
+| `treeserve`, default build | one file, links the system libc; runs on the same or newer glibc |
+| `treeserve`, `./build.sh static` | one file, **no libc at all** — copy it to any Linux of the same architecture |
+| `treeserve.exe` | one file; needs the Visual C++ runtime unless you uncomment the `crt-static` line in `build.bat` |
+| `treesight.exe` | one file; uses the WebView2 runtime that ships with Windows 11 and current Windows 10 |
+| `treesight` (macOS) | one file; WKWebView is part of the OS. A bare executable runs, but only a `.app` bundle gets a dock icon and a proper app name |
+| `treesight` (Linux) | links WebKitGTK dynamically, so build it on the distro you will run it on; there is no realistic static option |
+
+The static build also swaps the highlighting regex engine from oniguruma (C) to
+fancy-regex (Rust) with `--no-default-features --features pure`, which is what
+removes the last C dependency. Output is byte-identical either way; highlighting
+is roughly twice as slow and the binary about 1.4 MB larger. That same flag makes
+cross-compiling `treeserve` painless, since a pure-Rust tree needs no C toolchain
+for the target. `treesight` is best built natively per platform — it links that
+platform's webview.
+
+For a macOS universal binary, build both architectures and join them:
+
+```sh
+cargo build --release --target aarch64-apple-darwin
+cargo build --release --target x86_64-apple-darwin
+lipo -create -output treeserve \
+    target/aarch64-apple-darwin/release/treeserve \
+    target/x86_64-apple-darwin/release/treeserve
+```
 
 ## Usage
 
