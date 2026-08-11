@@ -151,11 +151,39 @@ fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
         let app = app.clone();
         move |url| {
             if url.as_str().starts_with(&origin) {
+                // A "Download" link: ask where to put it and copy from disk,
+                // rather than leaving it to a webview download stack that is
+                // invisible on some platforms and absent on others.
+                if is_download_link(url) && save_as(&app, url) {
+                    return false;
+                }
                 return true;
             }
             // Links out of the served tree belong in the user's browser.
             let _ = app.opener().open_url(url.as_str(), None::<&str>);
             false
+        }
+    })
+    // Backstop for downloads the webview starts by itself — a PDF WKWebView
+    // declines to render, say. Without a destination those fail silently.
+    .on_download({
+        let app = app.clone();
+        move |_webview, event| {
+            match event {
+                tauri::webview::DownloadEvent::Requested { url, destination } => {
+                    if let Ok(dir) = app.path().download_dir() {
+                        *destination = dir.join(download_name(&url));
+                    }
+                }
+                tauri::webview::DownloadEvent::Finished { path, success, .. } => match (success, path)
+                {
+                    (true, Some(p)) => notify(&app, &format!("Saved to {}", p.display())),
+                    (false, _) => fail(&app, "The download did not finish.", false),
+                    _ => {}
+                },
+                _ => {}
+            }
+            true
         }
     })
     .build()
@@ -194,6 +222,78 @@ fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
     Ok(())
 }
 
+/// `?dl=1`, the query the server's "Download" links carry.
+fn is_download_link(url: &tauri::Url) -> bool {
+    url.query_pairs().any(|(k, v)| k == "dl" && v == "1")
+}
+
+/// Last path segment of a URL, for naming a saved file.
+fn download_name(url: &tauri::Url) -> String {
+    url.path_segments()
+        .and_then(|mut s| s.next_back().filter(|s| !s.is_empty()))
+        .map(percent_decode)
+        .unwrap_or_else(|| "download".to_string())
+}
+
+/// Saves the file behind a download link through a native Save dialog.
+///
+/// The URL is resolved back to its path with the server's own checks, so the
+/// bytes are copied straight from the served tree — no second HTTP round trip,
+/// and nothing outside the root can be reached. Returns false when the link
+/// does not name a file, leaving the navigation to proceed as before.
+fn save_as(app: &AppHandle, url: &tauri::Url) -> bool {
+    let Some(serving) = app.try_state::<Serving>() else {
+        return false;
+    };
+    let Ok(target) = treeserve::resolve_in_root(&serving.inner.state.cfg.root(), url.path()) else {
+        return false;
+    };
+    if !target.abs.is_file() {
+        return false;
+    }
+
+    let app = app.clone();
+    let mut dialog = app
+        .dialog()
+        .file()
+        .set_title("Save file")
+        .set_file_name(target.rel.last().cloned().unwrap_or_default());
+    if let Ok(dir) = app.path().download_dir() {
+        dialog = dialog.set_directory(dir);
+    }
+    let src = target.abs;
+    dialog.save_file(move |dest| {
+        let Some(dest) = dest.and_then(|d| d.into_path().ok()) else {
+            return; // cancelled
+        };
+        if let Err(e) = fs::copy(&src, &dest) {
+            fail(&app, &format!("Could not save {}: {e}", dest.display()), false);
+        }
+    });
+    true
+}
+
+/// Minimal percent-decoding for a single URL path segment.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    let hex = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+    while i < bytes.len() {
+        match (bytes[i], bytes.get(i + 1).copied(), bytes.get(i + 2).copied()) {
+            (b'%', Some(h), Some(l)) if hex(h).is_some() && hex(l).is_some() => {
+                out.push(hex(h).unwrap() * 16 + hex(l).unwrap());
+                i += 3;
+            }
+            (c, _, _) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let file = Submenu::with_items(
         app,
@@ -225,6 +325,15 @@ fn window_title(root: &Path) -> String {
         Some(name) => format!("{} — treeserve", name.to_string_lossy()),
         None => "treeserve".to_string(),
     }
+}
+
+/// Says something happened, for actions with no visible result of their own.
+fn notify(app: &AppHandle, msg: &str) {
+    app.dialog()
+        .message(msg)
+        .kind(MessageDialogKind::Info)
+        .title("treeserve")
+        .show(|_| {});
 }
 
 /// Reports a problem in a native dialog, since a GUI build has nowhere to print.

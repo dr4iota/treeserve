@@ -103,6 +103,54 @@ pub struct State {
     pub hl: Hl,
 }
 
+/// Where a URL path points inside the served root.
+pub struct Resolved {
+    /// Percent-decoded path segments, for breadcrumbs and file names.
+    pub rel: Vec<String>,
+    /// Canonical filesystem path.
+    pub abs: PathBuf,
+}
+
+/// Why a URL path does not name something servable. The segments are carried
+/// along where they are safe to echo back in a page.
+pub enum PathError {
+    /// Malformed or traversing path; nothing safe to show.
+    Bad,
+    Missing(Vec<String>),
+    Outside(Vec<String>),
+}
+
+/// Resolves a URL path against the served root.
+///
+/// Shared by the request handler and by embedders that need the file behind a
+/// link (the desktop app's download handler), so the traversal and
+/// symlink-escape checks live in exactly one place.
+pub fn resolve_in_root(root: &Path, url_path: &str) -> Result<Resolved, PathError> {
+    let decoded = percent_decode(url_path);
+    let rel: Vec<String> = decoded
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect();
+    if decoded.contains('\0') || rel.iter().any(|s| s == "." || s == "..") {
+        return Err(PathError::Bad);
+    }
+
+    let mut abs = root.to_path_buf();
+    for seg in &rel {
+        abs.push(seg);
+    }
+    // canonicalize resolves symlinks; the prefix check keeps everything
+    // inside the served root.
+    let Ok(abs) = abs.canonicalize() else {
+        return Err(PathError::Missing(rel));
+    };
+    if !abs.starts_with(root) {
+        return Err(PathError::Outside(rel));
+    }
+    Ok(Resolved { rel, abs })
+}
+
 /// A running server: worker threads plus the address they are serving.
 pub struct Serving {
     pub addr: SocketAddr,
@@ -290,44 +338,30 @@ fn respond(state: &State, rq: Request) {
     }
 
     // Decode and sanitize the filesystem path.
-    let decoded = percent_decode(&path_raw);
-    let rel: Vec<String> = decoded
-        .split('/')
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .collect();
-    if decoded.contains('\0') || rel.iter().any(|s| s == "." || s == "..") {
-        let _ = rq.respond(html_resp(
-            400,
-            page::error_page(state, prefs, &[], &url_now, 400, "bad path"),
-        ));
-        return;
-    }
-
-    let root = state.cfg.root();
-    let mut abs = (*root).clone();
-    for seg in &rel {
-        abs.push(seg);
-    }
-    // canonicalize resolves symlinks; the prefix check keeps everything
-    // inside the served root.
-    let canon = match abs.canonicalize() {
-        Ok(c) => c,
-        Err(_) => {
+    let (rel, canon) = match resolve_in_root(&state.cfg.root(), &path_raw) {
+        Ok(r) => (r.rel, r.abs),
+        Err(PathError::Bad) => {
+            let _ = rq.respond(html_resp(
+                400,
+                page::error_page(state, prefs, &[], &url_now, 400, "bad path"),
+            ));
+            return;
+        }
+        Err(PathError::Missing(rel)) => {
             let _ = rq.respond(html_resp(
                 404,
                 page::error_page(state, prefs, &rel, &url_now, 404, "not found"),
             ));
             return;
         }
+        Err(PathError::Outside(rel)) => {
+            let _ = rq.respond(html_resp(
+                403,
+                page::error_page(state, prefs, &rel, &url_now, 403, "forbidden"),
+            ));
+            return;
+        }
     };
-    if !canon.starts_with(&*root) {
-        let _ = rq.respond(html_resp(
-            403,
-            page::error_page(state, prefs, &rel, &url_now, 403, "forbidden"),
-        ));
-        return;
-    }
 
     if canon.is_dir() {
         // Directory URLs need a trailing slash so relative links resolve.

@@ -114,7 +114,35 @@ cargo tauri build                          # installers (run inside app/)
   dropping a folder on the window. A second launch re-roots the existing window
   rather than starting a second copy. **View** has Back/Forward/Reload/Top of
   Tree, since a Tauri window has no browser chrome of its own.
+- **Downloads** don't go through the webview's download stack, which is invisible
+  on some platforms and missing on others. A `?dl=1` link is intercepted, the URL
+  is resolved back to its file with the server's own traversal checks, and a
+  native Save dialog copies it straight off disk — no second HTTP round trip.
+  Downloads the webview starts by itself (a PDF WKWebView won't render, say)
+  still get a destination in the OS download folder and a confirmation.
 - Links pointing outside the served tree open in the system browser.
+
+### Windows Explorer integration
+
+`app/windows/hooks.nsh` is an NSIS installer hook that registers a **“Browse
+with treeserve”** verb for folders, folder backgrounds and drives, pointing at
+`"$INSTDIR\treeserve.exe" "%V"`. It is written under `SHCTX`, so a per-user
+install registers in `HKCU` and a per-machine install in `HKLM`, and the
+uninstaller removes it. On Windows 11 the entry appears under **Show more
+options** — surfacing it in the top-level menu would need an `IExplorerCommand`
+shell extension, which this doesn't ship.
+
+### Do you need the Tauri CLI?
+
+Not for development: `cargo run -p treeserve-app` builds and runs the app, and
+this project has no JavaScript frontend, so nothing needs Node or pnpm. The CLI
+is only for packaging (`tauri build` → NSIS/MSI, deb/AppImage, dmg) and helpers
+like `tauri icon`. Install it as pure Rust, no Node involved:
+
+```sh
+cargo install tauri-cli --version "^2" --locked   # provides `cargo tauri`
+cargo binstall tauri-cli                          # or: prebuilt, much faster
+```
 
 The CLI is unaffected by any of this: it never sets a token, and its HTTP
 responses are byte-identical to the pre-workspace version.
