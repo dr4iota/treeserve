@@ -111,10 +111,11 @@ pub fn layout(
     show_ln_toggle: bool,
     content: &str,
 ) -> String {
+    let site_title = state.cfg.title();
     let title = if rel.is_empty() {
-        state.cfg.title.clone()
+        site_title.clone()
     } else {
-        format!("{} — {}", rel.join("/"), state.cfg.title)
+        format!("{} — {}", rel.join("/"), site_title)
     };
 
     let data_theme = match prefs.theme {
@@ -132,10 +133,7 @@ pub fn layout(
     };
 
     // Breadcrumbs
-    let mut crumbs = format!(
-        "<a href=\"/\">{}</a>",
-        html_escape(&state.cfg.title)
-    );
+    let mut crumbs = format!("<a href=\"/\">{}</a>", html_escape(&site_title));
     let mut acc: Vec<String> = Vec::new();
     for (i, seg) in rel.iter().enumerate() {
         acc.push(seg.clone());
@@ -220,7 +218,7 @@ pub fn layout(
             "{} v{} &middot; {}",
             env!("CARGO_PKG_NAME"),
             env!("CARGO_PKG_VERSION"),
-            html_escape(&state.cfg.root.display().to_string())
+            html_escape(&state.cfg.root().display().to_string())
         ),
     )
 }
@@ -232,7 +230,7 @@ const TREE_MAX_PER_DIR: usize = 150;
 /// tree with that branch expanded), so no JavaScript is needed.
 fn tree_html(state: &State, cur: &[String]) -> String {
     let mut out = String::from("<nav class=\"tree\">");
-    tree_dir(state, &state.cfg.root, &mut Vec::new(), cur, &mut out);
+    tree_dir(state, &state.cfg.root(), &mut Vec::new(), cur, &mut out);
     out.push_str("</nav>");
     out
 }
