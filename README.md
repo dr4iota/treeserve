@@ -11,6 +11,7 @@ themes. Plain HTML output, zero JavaScript, no runtime dependencies.
 ./build.sh            # or build.bat on Windows → dist/treeserve, dist/treesight
 ./build.sh server     # just the server, no webview libraries needed
 ./build.sh static     # server as one fully static file (musl, no libc)
+./build.sh windows    # both .exe files, cross-compiled → dist/windows/
 ./build.sh install ~/bin       # copy dist/* there; ~/bin is the default
 ./build.sh bundle     # also the installers (needs cargo-tauri, see below)
 ```
@@ -53,18 +54,46 @@ only on what it links against:
 |---|---|
 | `treeserve`, default build | one file, links the system libc; runs on the same or newer glibc |
 | `treeserve`, `./build.sh static` | one file, **no libc at all** — copy it to any Linux of the same architecture |
-| `treeserve.exe` | one file; needs the Visual C++ runtime unless you uncomment the `crt-static` line in `build.bat` |
-| `treesight.exe` | one file; uses the WebView2 runtime that ships with Windows 11 and current Windows 10 |
+| `treeserve.exe`, `build.bat` | one file; needs the Visual C++ runtime unless you uncomment the `crt-static` line |
+| `treeserve.exe`, `./build.sh windows` | one file; imports only OS DLLs and the Universal CRT, so there is no runtime to install |
+| `treesight.exe` | uses the WebView2 runtime that ships with Windows 11 and current Windows 10. One file from `build.bat`; cross-compiled it also needs `WebView2Loader.dll` beside it |
 | `treesight` (macOS) | one file; WKWebView is part of the OS. A bare executable runs, but only a `.app` bundle gets a dock icon and a proper app name |
 | `treesight` (Linux) | links WebKitGTK dynamically, so build it on the distro you will run it on; there is no realistic static option |
 
 The static build also swaps the highlighting regex engine from oniguruma (C) to
 fancy-regex (Rust) with `--no-default-features --features pure`, which is what
 removes the last C dependency. Output is byte-identical either way; highlighting
-is roughly twice as slow and the binary about 1.4 MB larger. That same flag makes
-cross-compiling `treeserve` painless, since a pure-Rust tree needs no C toolchain
-for the target. `treesight` is best built natively per platform — it links that
-platform's webview.
+is roughly twice as slow and the binary about 1.4 MB larger. That same flag also
+makes cross-compiling `treeserve` painless anywhere you have no C toolchain for
+the target, though the Windows cross build below does not need it. `treesight`
+is otherwise best built natively per platform, since it links that platform's
+webview.
+
+### Cross-compiling for Windows from Linux
+
+`./build.sh windows` produces both `.exe` files — binaries only, no installer;
+that part of Tauri's bundler is Windows-only. Two tools, neither of which needs
+root or distro packages:
+
+```sh
+rustup target add x86_64-pc-windows-gnu
+cargo install cargo-zigbuild --locked   # or: cargo binstall cargo-zigbuild
+# plus zig 0.15+ on your PATH, from https://ziglang.org/download/
+```
+
+zig is doing all the real work: it carries a mingw-w64 sysroot, a C compiler
+(so oniguruma still builds, and the result keeps the faster default engine), a
+linker and a resource compiler. `cargo-zigbuild` points cargo's linker and
+`cc-rs` at it. `build.sh` then writes two shims into `target/zig-shims/`,
+because a couple of build scripts still reach for binutils by name: `rustc`
+wants a `dlltool` for the raw-dylib imports in `windows-sys`, and `tauri-winres`
+will only drive a GNU `windres` for the icon, version info and DPI-awareness
+manifest — `zig dlltool` and `zig rc` do both jobs behind those names.
+
+The gnu target links WebView2's loader as a DLL, where the MSVC build gets a
+static library, so `dist/windows/treesight.exe` travels with the
+`WebView2Loader.dll` next to it. `treeserve.exe` stays a single file. To get a
+one-file `treesight.exe` — or an installer — build on Windows with `build.bat`.
 
 For a macOS universal binary, build both architectures and join them:
 
