@@ -55,7 +55,7 @@ pub fn run() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running treeserve");
+        .expect("error while running treesight");
 }
 
 /// First argument that names a readable directory.
@@ -322,8 +322,8 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 
 fn window_title(root: &Path) -> String {
     match root.file_name() {
-        Some(name) => format!("{} — treeserve", name.to_string_lossy()),
-        None => "treeserve".to_string(),
+        Some(name) => format!("{} — treesight", name.to_string_lossy()),
+        None => "treesight".to_string(),
     }
 }
 
@@ -332,7 +332,7 @@ fn notify(app: &AppHandle, msg: &str) {
     app.dialog()
         .message(msg)
         .kind(MessageDialogKind::Info)
-        .title("treeserve")
+        .title("treesight")
         .show(|_| {});
 }
 
@@ -343,7 +343,7 @@ fn fail(app: &AppHandle, msg: &str, fatal: bool) {
     app.dialog()
         .message(msg)
         .kind(MessageDialogKind::Error)
-        .title("treeserve")
+        .title("treesight")
         .show(move |_| {
             if fatal {
                 app.exit(1);

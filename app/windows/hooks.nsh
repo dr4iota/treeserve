@@ -1,4 +1,4 @@
-; Explorer integration: a "Browse with treeserve" verb on folders, on the
+; Explorer integration: a "Browse with treesight" verb on folders, on the
 ; background of an open folder, and on drives. %V is the clicked folder, which
 ; the app takes as its root argument.
 ;
@@ -7,24 +7,24 @@
 ; Note that Windows 11 shows third-party verbs under "Show more options"
 ; unless the app ships an IExplorerCommand shell extension.
 
-!macro TreeserveRegisterVerb ROOT
-  WriteRegStr SHCTX "Software\Classes\${ROOT}\shell\treeserve" "" "Browse with treeserve"
-  WriteRegStr SHCTX "Software\Classes\${ROOT}\shell\treeserve" "Icon" "$INSTDIR\${MAINBINARYNAME}.exe,0"
-  WriteRegStr SHCTX "Software\Classes\${ROOT}\shell\treeserve\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" "%V"'
+!macro TreesightRegisterVerb ROOT
+  WriteRegStr SHCTX "Software\Classes\${ROOT}\shell\treesight" "" "Browse with treesight"
+  WriteRegStr SHCTX "Software\Classes\${ROOT}\shell\treesight" "Icon" "$INSTDIR\${MAINBINARYNAME}.exe,0"
+  WriteRegStr SHCTX "Software\Classes\${ROOT}\shell\treesight\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" "%V"'
 !macroend
 
-!macro TreeserveUnregisterVerb ROOT
-  DeleteRegKey SHCTX "Software\Classes\${ROOT}\shell\treeserve"
+!macro TreesightUnregisterVerb ROOT
+  DeleteRegKey SHCTX "Software\Classes\${ROOT}\shell\treesight"
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
-  !insertmacro TreeserveRegisterVerb "Directory"
-  !insertmacro TreeserveRegisterVerb "Directory\Background"
-  !insertmacro TreeserveRegisterVerb "Drive"
+  !insertmacro TreesightRegisterVerb "Directory"
+  !insertmacro TreesightRegisterVerb "Directory\Background"
+  !insertmacro TreesightRegisterVerb "Drive"
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL
-  !insertmacro TreeserveUnregisterVerb "Directory"
-  !insertmacro TreeserveUnregisterVerb "Directory\Background"
-  !insertmacro TreeserveUnregisterVerb "Drive"
+  !insertmacro TreesightUnregisterVerb "Directory"
+  !insertmacro TreesightUnregisterVerb "Directory\Background"
+  !insertmacro TreesightUnregisterVerb "Drive"
 !macroend

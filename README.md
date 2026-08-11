@@ -8,13 +8,28 @@ themes. Plain HTML output, zero JavaScript, no runtime dependencies.
 ## Build
 
 ```sh
-cargo build --release        # → target/release/treeserve (~3 MB static-ish binary)
+./build.sh            # or build.bat on Windows → dist/treeserve, dist/treesight
+./build.sh server     # just the server, no webview libraries needed
+./build.sh bundle     # also the installers (needs cargo-tauri, see below)
 ```
 
-The repository is a two-crate workspace: `treeserve` (the server library and
-its CLI) and `treeserve-app` (an optional desktop shell, see below). Plain
-`cargo build` at the root builds only the former, so the desktop app's webview
-system libraries are never needed unless you ask for them.
+Two crates, two binaries:
+
+| | |
+|---|---|
+| `treeserve` | the HTTP server and its CLI — ~3 MB, no system dependencies |
+| `treesight` | the desktop app: the same server in a native window |
+
+Plain `cargo build` at the root builds only `treeserve`, so the desktop app's
+webview libraries (`libwebkit2gtk-4.1-dev` on Linux, WebView2 on Windows,
+WKWebView on macOS) are needed only when you ask for `treesight`.
+
+**Both binaries run fully offline.** Stylesheets, all ~30 syntax themes, the
+Markdown parser and the LaTeX→MathML renderer are compiled in; a served page
+references no external host, so nothing is fetched at run time — no CDN, no
+webfonts, no telemetry. The only network access is at build time: `cargo`
+fetching crates, and, for `build.sh bundle`, the Tauri bundler fetching its
+NSIS/AppImage tooling and the WebView2 runtime (see below).
 
 ## Usage
 
@@ -90,14 +105,14 @@ Example: `treeserve -p 9000 ~/projects/notes`
 - `?src=1` – highlighted source view for Markdown files
 - `?q=GLOB&r=1` – filter a directory listing (recursive with `r=1`)
 
-## Desktop app
+## Desktop app — treesight
 
 `app/` wraps the same server in a Tauri window, for people who would rather
 double-click an icon than run a command:
 
 ```sh
-cargo run -p treeserve-app -- [FOLDER]     # dev run
-cargo tauri build                          # installers (run inside app/)
+cargo run -p treesight -- [FOLDER]     # dev run
+./build.sh bundle                      # installers → target/release/bundle/
 ```
 
 - **Started with a folder** (argument, shell verb, drag onto the exe) it serves
@@ -125,17 +140,26 @@ cargo tauri build                          # installers (run inside app/)
 ### Windows Explorer integration
 
 `app/windows/hooks.nsh` is an NSIS installer hook that registers a **“Browse
-with treeserve”** verb for folders, folder backgrounds and drives, pointing at
-`"$INSTDIR\treeserve.exe" "%V"`. It is written under `SHCTX`, so a per-user
+with treesight”** verb for folders, folder backgrounds and drives, pointing at
+`"$INSTDIR\treesight.exe" "%V"`. It is written under `SHCTX`, so a per-user
 install registers in `HKCU` and a per-machine install in `HKLM`, and the
 uninstaller removes it. On Windows 11 the entry appears under **Show more
 options** — surfacing it in the top-level menu would need an `IExplorerCommand`
 shell extension, which this doesn't ship.
 
+### Offline installers
+
+The WebView2 runtime ships *inside* the Windows installer
+(`webviewInstallMode: offlineInstaller`), so installing needs no network at all.
+That costs about 127 MB of installer size; it is already present on Windows 11
+and current Windows 10, so switch to `downloadBootstrapper` in
+`app/tauri.conf.json` if you would rather have a small installer and let it
+fetch the runtime on first install.
+
 ### Do you need the Tauri CLI?
 
-Not for development: `cargo run -p treeserve-app` builds and runs the app, and
-this project has no JavaScript frontend, so nothing needs Node or pnpm. The CLI
+Not for development: `cargo run -p treesight` builds and runs the app, and this
+project has no JavaScript frontend, so nothing here needs Node or pnpm. The CLI
 is only for packaging (`tauri build` → NSIS/MSI, deb/AppImage, dmg) and helpers
 like `tauri icon`. Install it as pure Rust, no Node involved:
 
@@ -144,7 +168,7 @@ cargo install tauri-cli --version "^2" --locked   # provides `cargo tauri`
 cargo binstall tauri-cli                          # or: prebuilt, much faster
 ```
 
-The CLI is unaffected by any of this: it never sets a token, and its HTTP
+The server CLI is unaffected by all of this: it never sets a token, and its HTTP
 responses are byte-identical to the pre-workspace version.
 
 ## Direct dependencies
@@ -152,5 +176,5 @@ responses are byte-identical to the pre-workspace version.
 `tiny_http` (sync HTTP server), `syntect` + `two-face` (highlighting),
 `comrak` (Markdown), `pulldown-latex` (LaTeX → MathML). Everything else —
 argument parsing, URL handling, templating, glob matching — is hand-rolled
-std-only Rust. The desktop crate adds `tauri` plus its dialog, opener and
+std-only Rust. The `treesight` crate adds `tauri` plus its dialog, opener and
 single-instance plugins.

@@ -4218,7 +4218,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "treeserve-app"
+name = "treesight"
 version = "0.1.0"
 dependencies = [
  "getrandom 0.3.4",

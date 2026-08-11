@@ -1,5 +1,5 @@
 [package]
-name = "treeserve-app"
+name = "treesight"
 version = "0.1.0"
 edition = "2024"
 description = "Desktop shell for treeserve: a native window over the local server"
@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [lib]
-name = "treeserve_app"
+name = "treesight"
 crate-type = ["lib"]
 
 [build-dependencies]
