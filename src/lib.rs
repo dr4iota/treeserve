@@ -43,6 +43,21 @@ pub struct Config {
     pub threads: usize,
     pub syn_light: EmbeddedThemeName,
     pub syn_dark: EmbeddedThemeName,
+    /// Renders the controls that only make sense inside the desktop shell: the
+    /// path bar, Back/Forward, the Places and Recent lists and the button that
+    /// opens the native folder picker. Every one of them re-roots the server or
+    /// names a path outside it, so this stays off for anything served over a
+    /// network and there is deliberately no CLI flag to turn it on. The
+    /// controls do nothing on their own: they are links the shell intercepts,
+    /// and this server has no route that would act on them.
+    pub app_ui: bool,
+    /// Fixed shortcuts for the Places list — (label, path) pairs the embedder
+    /// supplies, since it is the side that knows the platform's home, desktop
+    /// and drive layout. Only rendered when `app_ui` is set.
+    pub places: Vec<(String, PathBuf)>,
+    /// Recently served roots, newest first. Behind a lock like `root`, since it
+    /// grows while the server runs.
+    recent: RwLock<Arc<Vec<PathBuf>>>,
     /// When set, requests must carry a matching `ts_token` cookie, obtained by
     /// visiting `/.ts/auth?t=<token>&back=<path>`. Used by the desktop app,
     /// where the loopback port would otherwise be open to any local process.
@@ -65,6 +80,9 @@ impl Config {
             threads: 8,
             syn_light: EmbeddedThemeName::InspiredGithub,
             syn_dark: EmbeddedThemeName::OneHalfDark,
+            app_ui: false,
+            places: Vec::new(),
+            recent: RwLock::new(Arc::new(Vec::new())),
             token: None,
         }
     }
@@ -78,14 +96,28 @@ impl Config {
         *self.root.write().expect("root lock") = Arc::new(root);
     }
 
+    pub fn recent(&self) -> Arc<Vec<PathBuf>> {
+        Arc::clone(&self.recent.read().expect("recent lock"))
+    }
+
+    /// Replaces the Recent list, newest first. Called by the embedder whenever
+    /// it re-roots, so the next page render shows the new order.
+    pub fn set_recent(&self, recent: Vec<PathBuf>) {
+        *self.recent.write().expect("recent lock") = Arc::new(recent);
+    }
+
     pub fn title(&self) -> String {
         match &self.title {
             Some(t) => t.clone(),
-            None => self
-                .root()
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "/".to_string()),
+            None => {
+                let root = self.root();
+                match root.file_name() {
+                    Some(n) => n.to_string_lossy().into_owned(),
+                    // A drive, a share or `/` has no last component to show, so
+                    // name it by the whole path rather than by nothing.
+                    None => display_path(&root),
+                }
+            }
         }
     }
 

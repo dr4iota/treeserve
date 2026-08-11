@@ -192,17 +192,31 @@ cargo run -p treesight -- [FOLDER]     # dev run
 - **Started with a folder** (argument, shell verb, drag onto the exe) it serves
   it right away. **Started without one** — the normal double-click case, where
   the working directory is whatever the shell happened to pick — it opens a
-  native folder picker instead of guessing; cancelling quits. The chosen folder
-  is remembered only to position the next picker.
+  native folder picker instead of guessing; cancelling quits.
 - The server binds `127.0.0.1:0` (an OS-assigned port) and the window is
   pointed at it, so cookies, redirects, Range requests and relative links work
   exactly as in a browser. Because any local process could otherwise reach that
   port, the server runs with a per-run token: the window's first navigation
   exchanges it for a cookie via `/.ts/auth`, and requests without it get 403.
-- **File ▸ Open Folder…** (`Ctrl/Cmd+O`) re-roots the running server, as does
-  dropping a folder on the window. A second launch re-roots the existing window
-  rather than starting a second copy. **View** has Back/Forward/Reload/Top of
-  Tree, since a Tauri window has no browser chrome of its own.
+- **The left pane is the folder chooser**, so choosing one looks the same on
+  every platform — which the native dialogs do not, GTK offering *Other
+  Locations* where Windows offers *Quick access* and no tree at all:
+  **Places** (home, desktop, documents, downloads, and drive letters or `/`),
+  **Recent** (the last 8 roots, kept in `recent.txt` in the app's config dir),
+  the tree, and **Open Folder…** at the bottom for the native picker when you
+  would rather browse. Places never feed Recent: that list is fixed, and a
+  shortcut copying itself into the list below it would say nothing new.
+  Turning the tree off with **Tree** leaves the rest of the pane in place.
+- **The path bar** in the header serves whatever folder you type, `~` included,
+  and shows the current root the rest of the time. Re-rooting also happens by
+  dropping a folder on the window, and a second launch re-roots this window
+  rather than starting a second copy.
+- **No menu bar.** A Tauri window has no browser chrome, so Back and Forward are
+  the two buttons next to the path bar, and the shortcuts are
+  `Alt+←` / `Alt+→` (back, forward), `Ctrl+R` (reload), `Ctrl+Home` (top of
+  tree) and `Ctrl+O` (folder picker). On macOS a menu is also where `Cmd+Q` and
+  the clipboard shortcuts come from, so that platform needs its own menu back
+  before it is worth shipping there.
 - **Downloads** don't go through the webview's download stack, which is invisible
   on some platforms and missing on others. A `?dl=1` link is intercepted, the URL
   is resolved back to its file with the server's own traversal checks, and a
@@ -210,6 +224,27 @@ cargo run -p treesight -- [FOLDER]     # dev run
   Downloads the webview starts by itself (a PDF WKWebView won't render, say)
   still get a destination in the OS download folder and a confirmation.
 - Links pointing outside the served tree open in the system browser.
+
+### Why none of that reaches the web
+
+Every control above either re-roots the server or names a path outside it, so a
+page served to anything but this window must not offer them. Two things keep
+that true:
+
+- `Config::app_ui` decides whether they are rendered at all. It defaults to
+  `false`, `treesight` is the only thing that sets it, and there is no CLI flag
+  to turn it on — a flag plus `--bind 0.0.0.0` would be a remote filesystem
+  browser with a text box in it.
+- The controls do nothing on their own. They are ordinary links to `/.ts/open`,
+  `/.ts/root`, `/.ts/place`, `/.ts/back` and `/.ts/forward`, and **none of those
+  is a server route**: `treeserve` never re-roots itself over HTTP and answers
+  404 for all five. The desktop shell recognises them in its navigation handler
+  and cancels the navigation, the same way it already intercepts `?dl=1`
+  downloads. The capability lives in the one client allowed to have it.
+
+A page served by the CLI is therefore byte-for-byte what it was before this
+existed, still with no JavaScript in it. The shell does inject a small keydown
+handler for the shortcuts, since it has no menu to carry accelerators.
 
 ### Windows Explorer integration
 

@@ -12,7 +12,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
@@ -20,6 +19,25 @@ use treeserve::Config;
 
 const WINDOW: &str = "main";
 const WORKER_THREADS: usize = 4;
+/// How many roots the Recent list keeps.
+const RECENT_MAX: usize = 8;
+
+/// Keyboard shortcuts. The window has no menu bar, and on Windows and Linux a
+/// menu is what would otherwise carry accelerators, so the shell installs them
+/// itself. Clicks need nothing of the sort: the page's controls are ordinary
+/// links to `/.ts/…` that `on_navigation` intercepts, which is why this script
+/// only ever navigates — the same thing a click does.
+const SHORTCUTS: &str = r#"
+addEventListener('keydown', function (e) {
+  if (e.altKey && !e.ctrlKey && e.key === 'ArrowLeft') { history.back(); }
+  else if (e.altKey && !e.ctrlKey && e.key === 'ArrowRight') { history.forward(); }
+  else if (e.ctrlKey && (e.key === 'r' || e.key === 'R')) { location.reload(); }
+  else if (e.ctrlKey && e.key === 'Home') { location.assign('/'); }
+  else if (e.ctrlKey && (e.key === 'o' || e.key === 'O')) { location.assign('/.ts/open'); }
+  else { return; }
+  e.preventDefault();
+});
+"#;
 
 /// The running server, kept in Tauri's managed state.
 struct Serving {
@@ -34,7 +52,7 @@ pub fn run() {
         // when it names a directory (Explorer "open with", drag onto the exe).
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             if let Some(dir) = first_dir_arg(argv.into_iter().skip(1)) {
-                open_root(app, dir);
+                open_root(app, dir, true);
             }
             if let Some(w) = app.get_webview_window(WINDOW) {
                 let _ = w.set_focus();
@@ -46,7 +64,7 @@ pub fn run() {
             let handle = app.handle().clone();
             match first_dir_arg(std::env::args().skip(1)) {
                 // Started from a shell with a path, or via a shell verb.
-                Some(dir) => open_root(&handle, dir),
+                Some(dir) => open_root(&handle, dir, true),
                 // Started by double-click: the working directory is wherever
                 // the shell happened to put us, which is never what the user
                 // meant, so ask which folder to browse.
@@ -66,15 +84,15 @@ fn first_dir_arg<I: Iterator<Item = String>>(args: I) -> Option<PathBuf> {
 }
 
 /// Native folder picker. Non-blocking: the blocking variant would deadlock the
-/// event loop when called from `setup` or a menu handler.
+/// event loop when called from `setup` or from a navigation handler.
 fn ask_for_folder(app: AppHandle, exit_if_cancelled: bool) {
     let mut dialog = app.dialog().file().set_title("Choose a folder to browse");
-    if let Some(last) = last_root(&app) {
+    if let Some(last) = recent(&app).into_iter().next() {
         dialog = dialog.set_directory(last);
     }
     dialog.pick_folder(move |picked| match picked {
         Some(path) => match path.into_path() {
-            Ok(dir) => open_root(&app, dir),
+            Ok(dir) => open_root(&app, dir, true),
             Err(e) => fail(&app, &format!("Cannot use that folder: {e}"), exit_if_cancelled),
         },
         None if exit_if_cancelled => app.exit(0),
@@ -83,7 +101,11 @@ fn ask_for_folder(app: AppHandle, exit_if_cancelled: bool) {
 }
 
 /// Serves `dir`: starts the server on first use, re-roots it afterwards.
-fn open_root(app: &AppHandle, dir: PathBuf) {
+///
+/// `remember` keeps it out of the Recent list, which is what the pane's Places
+/// need: that list is fixed, and a Place that added itself to Recent would just
+/// be duplicating a shortcut the pane already shows.
+fn open_root(app: &AppHandle, dir: PathBuf, remember: bool) {
     let dir = match dir.canonicalize() {
         Ok(d) if d.is_dir() => d,
         _ => {
@@ -91,7 +113,9 @@ fn open_root(app: &AppHandle, dir: PathBuf) {
             return;
         }
     };
-    remember_root(app, &dir);
+    if remember {
+        remember_root(app, &dir);
+    }
 
     if let Some(serving) = app.try_state::<Serving>() {
         serving.inner.state.cfg.set_root(dir.clone());
@@ -116,6 +140,12 @@ fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
     cfg.port = 0; // let the OS pick a free port
     cfg.threads = WORKER_THREADS;
     cfg.set_token(Some(token.clone()));
+    // Turns on the page's own chooser: path bar, history buttons, Places,
+    // Recent and the picker button. Only ever set here — a server reachable by
+    // anything but this window has no business offering them.
+    cfg.app_ui = true;
+    cfg.places = places(app);
+    cfg.set_recent(recent(app));
 
     let inner = treeserve::spawn(cfg).map_err(|e| format!("Cannot start the local server: {e}"))?;
     let origin = format!("http://127.0.0.1:{}", inner.addr.port());
@@ -134,7 +164,7 @@ fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
     .title(window_title(&root))
     .inner_size(1200.0, 850.0)
     .min_inner_size(480.0, 360.0)
-    .menu(menu(app).map_err(|e| e.to_string())?)
+    .initialization_script(SHORTCUTS)
     // The title follows the served root, which "Open Folder…" can change, so
     // it is refreshed on every page load rather than only at window creation.
     .on_page_load({
@@ -151,6 +181,12 @@ fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
         let app = app.clone();
         move |url| {
             if url.as_str().starts_with(&origin) {
+                // The page's own chrome. These paths are not routes: the server
+                // never re-roots itself and would answer 404, so the whole
+                // capability lives here, in the one client that may have it.
+                if shell_action(&app, url) {
+                    return false;
+                }
                 // A "Download" link: ask where to put it and copy from disk,
                 // rather than leaving it to a webview download stack that is
                 // invisible on some platforms and absent on others.
@@ -189,24 +225,6 @@ fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
     .build()
     .map_err(|e| format!("Cannot create the window: {e}"))?;
 
-    win.on_menu_event(|win, event| {
-        let app = win.app_handle().clone();
-        let js = match event.id().as_ref() {
-            "open" => {
-                ask_for_folder(app, false);
-                return;
-            }
-            "reload" => "location.reload()",
-            "back" => "history.back()",
-            "forward" => "history.forward()",
-            "home" => "location.assign('/')",
-            _ => return,
-        };
-        if let Some(w) = app.get_webview_window(WINDOW) {
-            let _ = w.eval(js);
-        }
-    });
-
     // Dropping a folder on the window re-roots; dropping a file opens its page.
     win.on_window_event({
         let app = app.clone();
@@ -214,7 +232,7 @@ fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
             if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event
                 && let Some(dir) = paths.iter().find(|p| p.is_dir())
             {
-                open_root(&app, dir.clone());
+                open_root(&app, dir.clone(), true);
             }
         }
     });
@@ -294,36 +312,87 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
-    let file = Submenu::with_items(
-        app,
-        "File",
-        true,
-        &[
-            &MenuItem::with_id(app, "open", "Open Folder…", true, Some("CmdOrCtrl+O"))?,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::quit(app, None)?,
-        ],
-    )?;
-    let view = Submenu::with_items(
-        app,
-        "View",
-        true,
-        &[
-            &MenuItem::with_id(app, "back", "Back", true, Some("Alt+Left"))?,
-            &MenuItem::with_id(app, "forward", "Forward", true, Some("Alt+Right"))?,
-            &MenuItem::with_id(app, "home", "Top of Tree", true, Some("CmdOrCtrl+Home"))?,
-            &PredefinedMenuItem::separator(app)?,
-            &MenuItem::with_id(app, "reload", "Reload", true, Some("CmdOrCtrl+R"))?,
-        ],
-    )?;
-    Menu::with_items(app, &[&file, &view])
+/// Handles the page's own controls, which are links rather than script: the
+/// picker button, the history buttons, and everything that re-roots (Places,
+/// Recent, the path bar). Returns whether the navigation was one of ours and
+/// should therefore be cancelled.
+fn shell_action(app: &AppHandle, url: &tauri::Url) -> bool {
+    match url.path() {
+        "/.ts/open" => ask_for_folder(app.clone(), false),
+        "/.ts/back" => eval(app, "history.back()"),
+        "/.ts/forward" => eval(app, "history.forward()"),
+        // Recent and the path bar; a Place is the same but not worth
+        // remembering, since the pane already lists it.
+        "/.ts/root" | "/.ts/place" => match url.query_pairs().find(|(k, _)| k == "path") {
+            // A typed path may start with a `~` no shell has expanded, and may
+            // name something that is not there at all, hence the fixing up and
+            // the check inside `open_root`.
+            Some((_, path)) => {
+                let dir = expand_home(app, path.trim());
+                open_root(app, dir, url.path() == "/.ts/root");
+            }
+            None => fail(app, "No folder in that link.", false),
+        },
+        _ => return false,
+    }
+    true
+}
+
+fn eval(app: &AppHandle, js: &str) {
+    if let Some(w) = app.get_webview_window(WINDOW) {
+        let _ = w.eval(js);
+    }
+}
+
+/// `~` and `~/…` mean the home directory, as everywhere else.
+fn expand_home(app: &AppHandle, path: &str) -> PathBuf {
+    let Ok(home) = app.path().home_dir() else {
+        return PathBuf::from(path);
+    };
+    match path.strip_prefix('~') {
+        Some("") => home,
+        Some(rest) if rest.starts_with('/') || rest.starts_with('\\') => home.join(&rest[1..]),
+        _ => PathBuf::from(path),
+    }
+}
+
+/// Fixed shortcuts for the pane's Places list.
+///
+/// The shell resolves these because it is the side that knows the platform:
+/// where the home directory is, and what stands in for "everything else" —
+/// drive roots on Windows, `/` elsewhere. That last entry is the one the GTK
+/// picker calls "Other Locations" and the Windows picker calls "This PC";
+/// having our own means it is in the same place on both.
+fn places(app: &AppHandle) -> Vec<(String, PathBuf)> {
+    let p = app.path();
+    let mut out: Vec<(String, PathBuf)> = [
+        ("Home", p.home_dir()),
+        ("Desktop", p.desktop_dir()),
+        ("Documents", p.document_dir()),
+        ("Downloads", p.download_dir()),
+    ]
+    .into_iter()
+    .filter_map(|(label, dir)| dir.ok().filter(|d| d.is_dir()).map(|d| (label.to_string(), d)))
+    .collect();
+
+    #[cfg(windows)]
+    for letter in b'A'..=b'Z' {
+        let drive = PathBuf::from(format!("{}:\\", letter as char));
+        if drive.is_dir() {
+            out.push((format!("{}:", letter as char), drive));
+        }
+    }
+    #[cfg(not(windows))]
+    out.push(("Filesystem".to_string(), PathBuf::from("/")));
+
+    out
 }
 
 fn window_title(root: &Path) -> String {
     match root.file_name() {
         Some(name) => format!("{} — treesight", name.to_string_lossy()),
-        None => "treesight".to_string(),
+        // A drive or a share: no last component, so say which one it is.
+        None => format!("{} — treesight", treeserve::util::display_path(root)),
     }
 }
 
@@ -358,24 +427,44 @@ fn new_token() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn last_root_file(app: &AppHandle) -> Option<PathBuf> {
-    app.path()
-        .app_config_dir()
-        .ok()
-        .map(|d| d.join("last-root.txt"))
+fn recent_file(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_config_dir().ok().map(|d| d.join("recent.txt"))
 }
 
-fn last_root(app: &AppHandle) -> Option<PathBuf> {
-    let path = fs::read_to_string(last_root_file(app)?).ok()?;
-    let path = PathBuf::from(path.trim());
-    path.is_dir().then_some(path)
+/// Roots served before, newest first. Folders that have since gone away are
+/// dropped, so a stale list cannot offer something that no longer opens.
+fn recent(app: &AppHandle) -> Vec<PathBuf> {
+    let Some(file) = recent_file(app) else {
+        return Vec::new();
+    };
+    let Ok(text) = fs::read_to_string(file) else {
+        return Vec::new();
+    };
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+        .take(RECENT_MAX)
+        .collect()
 }
 
-/// Remembered only to seed the next folder picker, not to reopen silently.
+/// Moves `root` to the front of the Recent list, on disk and in the running
+/// server so the next page render shows it. Places are deliberately not fed
+/// through here: that list stays fixed.
 fn remember_root(app: &AppHandle, root: &Path) {
-    let Some(file) = last_root_file(app) else { return };
+    let mut list = recent(app);
+    list.retain(|p| p != root);
+    list.insert(0, root.to_path_buf());
+    list.truncate(RECENT_MAX);
+
+    if let Some(serving) = app.try_state::<Serving>() {
+        serving.inner.state.cfg.set_recent(list.clone());
+    }
+    let Some(file) = recent_file(app) else { return };
     if let Some(dir) = file.parent() {
         let _ = fs::create_dir_all(dir);
     }
-    let _ = fs::write(file, root.to_string_lossy().as_bytes());
+    let text: String = list.iter().map(|p| format!("{}\n", p.display())).collect();
+    let _ = fs::write(file, text);
 }

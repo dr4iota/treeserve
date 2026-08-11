@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn html_escape(s: &str) -> String {
@@ -75,6 +76,24 @@ pub fn href_path(rel: &[String]) -> String {
         out.push_str(&percent_encode(seg));
     }
     out
+}
+
+/// A filesystem path as a human would write it.
+///
+/// `canonicalize` on Windows returns verbatim paths — `\\?\C:\dir`, or
+/// `\\?\UNC\server\share` for a network location — and that prefix has no place
+/// in a page or a title. For display only: the stored root keeps the verbatim
+/// form, because `resolve_in_root` compares it against freshly canonicalized
+/// paths and the two spellings would never match.
+pub fn display_path(p: &Path) -> String {
+    let s = p.display().to_string();
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) => match rest.strip_prefix(r"UNC\") {
+            Some(unc) => format!(r"\\{unc}"),
+            None => rest.to_string(),
+        },
+        None => s,
+    }
 }
 
 /// Parse "a=1&b=2" into pairs; keys and values are decoded ('+' becomes space).

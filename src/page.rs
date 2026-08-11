@@ -174,8 +174,34 @@ pub fn layout(
         prefs.theme.as_str()
     ));
 
-    let sidebar = if prefs.sidebar {
-        tree_html(state, rel)
+    // The desktop shell's own chrome. Both of these are inert here — the shell
+    // intercepts the links; this server has no route for them.
+    // Leading newline rather than a line of its own in the template, so a page
+    // served without the shell keeps exactly the bytes it had before.
+    let appnav = if state.cfg.app_ui {
+        format!(
+            concat!(
+                "\n  <div class=\"appnav\">",
+                "<a class=\"navbtn\" href=\"/.ts/back\" title=\"Back (Alt+Left)\">&#x2190;</a>",
+                "<a class=\"navbtn\" href=\"/.ts/forward\" title=\"Forward (Alt+Right)\">&#x2192;</a>",
+                "<form class=\"pathbar\" action=\"/.ts/root\" method=\"get\">",
+                "<input name=\"path\" value=\"{root}\" spellcheck=\"false\" ",
+                "aria-label=\"Folder to serve\" title=\"Type a folder to serve\">",
+                "<button>Go</button>",
+                "</form>",
+                "</div>"
+            ),
+            root = html_escape(&display_path(&state.cfg.root()))
+        )
+    } else {
+        String::new()
+    };
+
+    // In the shell the pane also holds Places, Recent and the picker button, so
+    // it stays even with the tree off; served on its own it is the tree or
+    // nothing, exactly as before.
+    let sidebar = if prefs.sidebar || state.cfg.app_ui {
+        pane_html(state, prefs, rel)
     } else {
         String::new()
     };
@@ -193,7 +219,7 @@ pub fn layout(
 {syntax_css}
 </head>
 <body>
-<header>
+<header>{appnav}
   <div class="crumbs">{crumbs}</div>
   <div class="controls">{controls}</div>
 </header>
@@ -210,6 +236,7 @@ pub fn layout(
         data_theme = data_theme,
         title = html_escape(&title),
         syntax_css = syntax_css,
+        appnav = appnav,
         crumbs = crumbs,
         controls = controls,
         sidebar = sidebar,
@@ -218,21 +245,89 @@ pub fn layout(
             "{} v{} &middot; {}",
             env!("CARGO_PKG_NAME"),
             env!("CARGO_PKG_VERSION"),
-            html_escape(&state.cfg.root().display().to_string())
+            html_escape(&display_path(&state.cfg.root()))
         ),
     )
 }
 
 const TREE_MAX_PER_DIR: usize = 150;
 
-/// Server-rendered directory tree. Directories on the path to `cur` are
-/// expanded; everything else renders as a link (navigation re-renders the
-/// tree with that branch expanded), so no JavaScript is needed.
-fn tree_html(state: &State, cur: &[String]) -> String {
+/// The left pane: the directory tree, and in the desktop shell the Places and
+/// Recent shortcuts above it plus the folder picker pinned below.
+///
+/// Keeps the `nav.tree` element even when it holds more than the tree, so one
+/// stylesheet rule still hides the whole pane on narrow screens.
+fn pane_html(state: &State, prefs: Prefs, cur: &[String]) -> String {
     let mut out = String::from("<nav class=\"tree\">");
-    tree_dir(state, &state.cfg.root(), &mut Vec::new(), cur, &mut out);
+    if state.cfg.app_ui {
+        // Two paths on purpose: opening a Place is not something Recent should
+        // collect, or the fixed list would keep copying itself into the other
+        // one. Opening something from Recent does move it back to the top.
+        root_list(
+            &mut out,
+            "places",
+            "Places",
+            "/.ts/place",
+            state.cfg.places.iter().cloned(),
+        );
+        root_list(
+            &mut out,
+            "recent",
+            "Recent",
+            "/.ts/root",
+            state.cfg.recent().iter().map(|p| (root_label(p), p.clone())),
+        );
+    }
+    if prefs.sidebar {
+        tree_dir(state, &state.cfg.root(), &mut Vec::new(), cur, &mut out);
+    }
+    if state.cfg.app_ui {
+        out.push_str(
+            "<a class=\"pick\" href=\"/.ts/open\" title=\"Open Folder… (Ctrl+O)\">\
+             Open Folder&hellip;</a>",
+        );
+    }
     out.push_str("</nav>");
     out
+}
+
+/// One pane section of "serve this folder instead" links. `action` is the path
+/// the shell recognises, which is also how it tells a Place from a Recent.
+fn root_list<I: Iterator<Item = (String, PathBuf)>>(
+    out: &mut String,
+    class: &str,
+    heading: &str,
+    action: &str,
+    items: I,
+) {
+    let links: String = items
+        .map(|(label, path)| {
+            let full = display_path(&path);
+            format!(
+                "<li><a href=\"{}?path={}\" title=\"{}\">{}</a></li>",
+                action,
+                percent_encode(&full),
+                html_escape(&full),
+                html_escape(&label)
+            )
+        })
+        .collect();
+    if links.is_empty() {
+        return;
+    }
+    out.push_str(&format!(
+        "<section class=\"{}\"><h2>{}</h2><ul>{}</ul></section>",
+        class, heading, links
+    ));
+}
+
+/// Short name for a remembered root: its own name, or the whole path for a
+/// filesystem or drive root, which has no file name to show.
+fn root_label(p: &Path) -> String {
+    match p.file_name() {
+        Some(n) => n.to_string_lossy().into_owned(),
+        None => display_path(p),
+    }
 }
 
 fn tree_dir(state: &State, abs: &Path, rel: &mut Vec<String>, cur: &[String], out: &mut String) {
