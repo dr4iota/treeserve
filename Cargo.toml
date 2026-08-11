@@ -1,3 +1,9 @@
+[workspace]
+members = ["app"]
+# `cargo build` at the root builds only the server and CLI; the desktop app
+# needs system webview libraries, so it is opt-in via `-p treeserve-app`.
+default-members = ["."]
+
 [package]
 name = "treeserve"
 version = "0.1.0"

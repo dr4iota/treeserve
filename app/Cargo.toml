@@ -1,0 +1,22 @@
+[package]
+name = "treeserve-app"
+version = "0.1.0"
+edition = "2024"
+description = "Desktop shell for treeserve: a native window over the local server"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+name = "treeserve_app"
+crate-type = ["lib"]
+
+[build-dependencies]
+tauri-build = "2"
+
+[dependencies]
+getrandom = "0.3"
+tauri = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
+treeserve = { path = ".." }

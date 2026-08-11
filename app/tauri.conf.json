@@ -1,0 +1,28 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "treeserve",
+  "version": "0.1.0",
+  "identifier": "dev.treeserve.desktop",
+  "build": {
+    "frontendDist": "dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
+    "shortDescription": "Browse a folder as a rendered website",
+    "longDescription": "treeserve renders a directory tree as a browsable site — syntax-highlighted code, Markdown with LaTeX math, media previews — served locally and shown in a native window."
+  }
+}

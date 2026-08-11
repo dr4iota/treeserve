@@ -11,6 +11,11 @@ themes. Plain HTML output, zero JavaScript, no runtime dependencies.
 cargo build --release        # → target/release/treeserve (~3 MB static-ish binary)
 ```
 
+The repository is a two-crate workspace: `treeserve` (the server library and
+its CLI) and `treeserve-app` (an optional desktop shell, see below). Plain
+`cargo build` at the root builds only the former, so the desktop app's webview
+system libraries are never needed unless you ask for them.
+
 ## Usage
 
 ```
@@ -85,9 +90,39 @@ Example: `treeserve -p 9000 ~/projects/notes`
 - `?src=1` – highlighted source view for Markdown files
 - `?q=GLOB&r=1` – filter a directory listing (recursive with `r=1`)
 
+## Desktop app
+
+`app/` wraps the same server in a Tauri window, for people who would rather
+double-click an icon than run a command:
+
+```sh
+cargo run -p treeserve-app -- [FOLDER]     # dev run
+cargo tauri build                          # installers (run inside app/)
+```
+
+- **Started with a folder** (argument, shell verb, drag onto the exe) it serves
+  it right away. **Started without one** — the normal double-click case, where
+  the working directory is whatever the shell happened to pick — it opens a
+  native folder picker instead of guessing; cancelling quits. The chosen folder
+  is remembered only to position the next picker.
+- The server binds `127.0.0.1:0` (an OS-assigned port) and the window is
+  pointed at it, so cookies, redirects, Range requests and relative links work
+  exactly as in a browser. Because any local process could otherwise reach that
+  port, the server runs with a per-run token: the window's first navigation
+  exchanges it for a cookie via `/.ts/auth`, and requests without it get 403.
+- **File ▸ Open Folder…** (`Ctrl/Cmd+O`) re-roots the running server, as does
+  dropping a folder on the window. A second launch re-roots the existing window
+  rather than starting a second copy. **View** has Back/Forward/Reload/Top of
+  Tree, since a Tauri window has no browser chrome of its own.
+- Links pointing outside the served tree open in the system browser.
+
+The CLI is unaffected by any of this: it never sets a token, and its HTTP
+responses are byte-identical to the pre-workspace version.
+
 ## Direct dependencies
 
 `tiny_http` (sync HTTP server), `syntect` + `two-face` (highlighting),
 `comrak` (Markdown), `pulldown-latex` (LaTeX → MathML). Everything else —
 argument parsing, URL handling, templating, glob matching — is hand-rolled
-std-only Rust.
+std-only Rust. The desktop crate adds `tauri` plus its dialog, opener and
+single-instance plugins.
