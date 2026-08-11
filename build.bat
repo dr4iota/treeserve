@@ -12,11 +12,13 @@ rem stylesheets, all syntax themes, the Markdown parser and the LaTeX renderer
 rem are compiled in, and nothing is fetched at run time.
 rem
 rem Usage:
-rem   build.bat              server + app       -^> dist\
-rem   build.bat server       server only        -^> dist\treeserve.exe
-rem   build.bat install      copy dist\* to C:\WinApps  (set TREE_PREFIX to
-rem                          override)
-rem   build.bat bundle       server + app + installers (needs cargo-tauri)
+rem   build.bat                 server + app  -^> dist\
+rem   build.bat server          server only   -^> dist\treeserve.exe
+rem   build.bat install DIR     copy dist\*.exe to DIR, e.g. C:\WinApps.
+rem                             The directory is required on purpose: no
+rem                             default means nothing lands where you did not
+rem                             ask for it.
+rem   build.bat bundle          server + app + installers (needs cargo-tauri)
 rem
 rem To drop the Visual C++ runtime dependency and get a fully self-contained
 rem exe, uncomment the next line. Untested here; remove it again if the link
@@ -28,13 +30,14 @@ cd /d "%~dp0"
 
 set "target=%~1"
 if "%target%"=="" set "target=all"
-if "%TREE_PREFIX%"=="" set "TREE_PREFIX=C:\WinApps"
+set "TREE_PREFIX=%~2"
 
 if "%target%"=="all" goto build
 if "%target%"=="server" goto build
 if "%target%"=="bundle" goto build
 if "%target%"=="install" goto install
-echo usage: build.bat [all^|server^|install^|bundle] 1>&2
+echo usage: build.bat [all^|server^|bundle] 1>&2
+echo        build.bat install DIR      e.g. build.bat install C:\WinApps 1>&2
 exit /b 2
 
 :build
@@ -68,12 +71,17 @@ popd
 goto report
 
 :install
+if "%TREE_PREFIX%"=="" (
+    echo error: install needs a destination, e.g. 1>&2
+    echo     build.bat install C:\WinApps 1>&2
+    exit /b 2
+)
 if not exist "dist\treeserve.exe" (
     echo nothing in dist\ yet; running a build first
     call "%~f0" all
     if errorlevel 1 exit /b 1
 )
-rem A trailing space in TREE_PREFIX would silently break every path below.
+rem A trailing space in the destination would silently break every path below.
 if "%TREE_PREFIX:~-1%"==" " set "TREE_PREFIX=%TREE_PREFIX:~0,-1%"
 if "%TREE_PREFIX:~-1%"=="\" set "TREE_PREFIX=%TREE_PREFIX:~0,-1%"
 if not exist "%TREE_PREFIX%" md "%TREE_PREFIX%"
@@ -103,7 +111,7 @@ echo built:
 for %%f in (dist\*.exe) do echo     %%f  (%%~zf bytes)
 if "%target%"=="bundle" echo     target\release\bundle\ (installers)
 echo.
-echo install with: build.bat install    (TREE_PREFIX=%TREE_PREFIX%)
+echo install with: build.bat install DIR    e.g. build.bat install C:\WinApps
 exit /b 0
 
 :bundlefailed

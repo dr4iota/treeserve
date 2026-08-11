@@ -11,13 +11,19 @@ themes. Plain HTML output, zero JavaScript, no runtime dependencies.
 ./build.sh            # or build.bat on Windows → dist/treeserve, dist/treesight
 ./build.sh server     # just the server, no webview libraries needed
 ./build.sh static     # server as one fully static file (musl, no libc)
-./build.sh install    # copy dist/* to ~/bin    (PREFIX=… to override)
+./build.sh install ~/bin       # copy dist/* there; ~/bin is the default
 ./build.sh bundle     # also the installers (needs cargo-tauri, see below)
 ```
 
-On Windows, `build.bat install` copies to `C:\WinApps` (set `TREE_PREFIX` to
-override). Both scripts print what they produced and warn when the destination
-is not on your `PATH`.
+On Windows the destination is required rather than defaulted, so nothing can
+land somewhere you did not ask for:
+
+```bat
+build.bat install C:\WinApps
+```
+
+Both scripts print what they produced and warn when the destination is not on
+your `PATH`.
 
 Two crates, two binaries:
 

@@ -12,15 +12,16 @@
 # are compiled in, and nothing is fetched at run time.
 #
 # Usage:
-#   ./build.sh              server + app       -> dist/
-#   ./build.sh server       server only        -> dist/treeserve
-#   ./build.sh static       server, fully static (musl, no libc at all)
-#   ./build.sh install      copy dist/* to ~/bin   (PREFIX=... to override)
-#   ./build.sh bundle       server + app + installers (needs cargo-tauri)
+#   ./build.sh                    server + app  -> dist/
+#   ./build.sh server             server only   -> dist/treeserve
+#   ./build.sh static             server, fully static (musl, no libc at all)
+#   ./build.sh install [DIR]      copy dist/* to DIR, default ~/bin
+#   ./build.sh bundle             server + app + installers (needs cargo-tauri)
 set -eu
 
 target=${1:-all}
-prefix=${PREFIX:-$HOME/bin}
+# install destination: argument, then $PREFIX, then ~/bin.
+prefix=${2:-${PREFIX:-$HOME/bin}}
 cd "$(dirname "$0")"
 
 build_server() {
@@ -89,7 +90,8 @@ bundle)
     (cd app && cargo tauri build)
     ;;
 *)
-    echo "usage: $0 [all|server|static|install|bundle]" >&2
+    echo "usage: $0 [all|server|static|bundle]" >&2
+    echo "       $0 install [DIR]        default: $HOME/bin" >&2
     exit 2
     ;;
 esac
@@ -101,5 +103,5 @@ for f in dist/*; do
 done
 [ "$target" = bundle ] && echo "    target/release/bundle/ (installers)"
 echo
-echo "install with: $0 install    (PREFIX=$prefix)"
+echo "install with: $0 install [DIR]    (default $prefix)"
 exit 0
