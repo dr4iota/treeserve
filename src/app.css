@@ -232,9 +232,13 @@ nav.tree .chooser .leaf, footer .where .leaf {
    The leaf can shrink, but only once the head is down to nothing — and then it
    ellipsises rather than being cut off at the edge of the pane, which is what a
    leaf that could not shrink at all did. */
-/* Enough width left for the ellipsis itself, or a head squeezed to nothing shows
-   nothing and the path looks like it starts where it does not. */
-nav.tree .chooser .head, footer .where .head { flex-shrink: 1000; min-width: .8rem; }
+/* The head goes all the way to nothing if that is what the name needs. It used to
+   keep back .8rem so its ellipsis had somewhere to sit, and that reads well right
+   up until the name is a few characters short of fitting — at which point the
+   thing being protected was the mark that says a path was shortened, at the cost
+   of the name it was shortening for. The name wins; the whole path is in the
+   `title` either way. */
+nav.tree .chooser .head, footer .where .head { flex-shrink: 1000; min-width: 0; }
 nav.tree .chooser .leaf, footer .where .leaf { flex: 0 1 auto; }
 nav.tree .chooser .head { color: var(--muted); }
 /* A shortcut whose check came back badly. The lists are drawn before anything is
