@@ -103,6 +103,22 @@ pub const ICON_DOWNLOAD: &str =
 pub const ICON_SOURCE: &str = "<path d=\"M6.2 4.4L2.7 8l3.5 3.6\"/><path d=\"M9.8 4.4L13.3 8l-3.5 3.6\"/>";
 pub const ICON_RENDERED: &str =
     "<path d=\"M3.4 3h9.2v10H3.4z\"/><path d=\"M5.4 6h5.2M5.4 8.4h5.2M5.4 10.8h3.4\"/>";
+/// The way out of a directory, on the `..` row.
+const ICON_UP: &str = "<path d=\"M8 12.8V3.8\"/><path d=\"M4.3 7.5L8 3.8l3.7 3.7\"/>";
+/// The theme flag says which theme is on rather than which one is next: a sun
+/// for light, a moon for dark, and half of each for following the system.
+const ICON_SUN: &str = "<path d=\"M8 4.8a3.2 3.2 0 100 6.4 3.2 3.2 0 000-6.4z\"/>\
+     <path d=\"M8 1.2v1.6M8 13.2v1.6M1.2 8h1.6M13.2 8h1.6M3.2 3.2l1.2 1.2\
+     M11.6 11.6l1.2 1.2M12.8 3.2l-1.2 1.2M4.4 11.6l-1.2 1.2\"/>";
+const ICON_MOON: &str = "<path d=\"M14 8.53A6 6 0 117.47 2 4.67 4.67 0 0014 8.53z\"/>";
+const ICON_THEME_AUTO: &str = "<path d=\"M8 2a6 6 0 100 12A6 6 0 008 2z\"/>\
+     <path fill=\"currentColor\" stroke=\"none\" d=\"M8 2.6a5.4 5.4 0 000 10.8z\"/>";
+/// The tree flag: a pane down the left of the window, which is what it hides.
+const ICON_PANE: &str =
+    "<path d=\"M2.2 3h11.6v10H2.2z\"/><path d=\"M6.4 3v10\"/><path d=\"M3.6 5.8h1.4M3.6 8h1.4\"/>";
+/// Line numbers: a gutter of them beside the lines they count.
+const ICON_LINENO: &str =
+    "<path d=\"M2.6 4.2h.8M2.6 8h.8M2.6 11.8h.8\"/><path d=\"M6 4.2h7.4M6 8h7.4M6 11.8h7.4\"/>";
 
 /// Wraps icon paths in an `<svg>` that inherits colour and text size.
 pub fn svg_icon(paths: &str) -> String {
@@ -110,6 +126,24 @@ pub fn svg_icon(paths: &str) -> String {
         "<svg viewBox=\"0 0 16 16\" width=\"14\" height=\"14\" fill=\"none\" stroke=\"currentColor\" \
          stroke-width=\"1.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" \
          aria-hidden=\"true\">{paths}</svg>"
+    )
+}
+
+/// The icon cell of a listing row.
+///
+/// Directories carry the class rather than being found by one: `tr:has(a.dir)`
+/// asked the row about its link, which left the colour to whether the webview
+/// knew `:has()`, and never applied to search results, whose links carry no
+/// class at all.
+fn entry_icon(name: &str, is_dir: bool) -> String {
+    icon_cell(is_dir, icon_for(name, is_dir))
+}
+
+fn icon_cell(is_dir: bool, paths: &str) -> String {
+    format!(
+        "<span class=\"icon{}\">{}</span>",
+        if is_dir { " dir" } else { "" },
+        svg_icon(paths)
     )
 }
 
@@ -206,7 +240,13 @@ pub fn layout(
     let mut controls = String::from(extra_controls);
     if show_ln_toggle {
         let (label, val) = if prefs.ln { ("Ln: on", "0") } else { ("Ln: off", "1") };
-        controls.push_str(&flag("", &set_href("ln", val, url_now), "#", label, "Line numbers"));
+        controls.push_str(&flag(
+            "",
+            &set_href("ln", val, url_now),
+            &svg_icon(ICON_LINENO),
+            label,
+            "Line numbers",
+        ));
     }
     let (tree_label, tree_val) = if prefs.sidebar {
         ("Tree: on", "0")
@@ -216,16 +256,21 @@ pub fn layout(
     controls.push_str(&flag(
         "",
         &set_href("sidebar", tree_val, url_now),
-        "&#x2630;", // trigram for heaven, i.e. the usual list glyph
+        &svg_icon(ICON_PANE),
         tree_label,
-        // Says what the symbol is for, since at narrow widths it is all there
-        // is to go on.
+        // Says what the icon is for, since at narrow widths it is all there is
+        // to go on.
         "File tree",
     ));
+    let theme_icon = match prefs.theme {
+        ThemeMode::Auto => ICON_THEME_AUTO,
+        ThemeMode::Light => ICON_SUN,
+        ThemeMode::Dark => ICON_MOON,
+    };
     controls.push_str(&flag(
         "",
         &set_href("theme", prefs.theme.next().as_str(), url_now),
-        "&#x25D0;", // half-filled circle
+        &svg_icon(theme_icon),
         &format!("Theme: {}", prefs.theme.as_str()),
         "Cycle theme",
     ));
@@ -483,7 +528,8 @@ fn entries_table(state: &State, rel: &[String], abs: &Path) -> String {
     if !rel.is_empty() {
         let parent = &rel[..rel.len() - 1];
         rows.push_str(&format!(
-            "<tr><td><span class=\"icon\">&#x2B06;&#xFE0F;</span><a href=\"{}/\">..</a></td><td class=\"size\"></td><td class=\"time\"></td></tr>",
+            "<tr><td>{}<a href=\"{}/\">..</a></td><td class=\"size\"></td><td class=\"time\"></td></tr>",
+            icon_cell(true, ICON_UP),
             html_escape(href_path(parent).trim_end_matches('/'))
         ));
     }
@@ -497,8 +543,8 @@ fn entries_table(state: &State, rel: &[String], abs: &Path) -> String {
             href.push('/');
         }
         rows.push_str(&format!(
-            "<tr><td><span class=\"icon\">{}</span><a href=\"{}\"{}>{}</a></td><td class=\"size\">{}</td><td class=\"time\">{}</td></tr>",
-            svg_icon(icon_for(&e.name, e.is_dir)),
+            "<tr><td>{}<a href=\"{}\"{}>{}</a></td><td class=\"size\">{}</td><td class=\"time\">{}</td></tr>",
+            entry_icon(&e.name, e.is_dir),
             html_escape(&href),
             if e.is_dir { " class=\"dir\"" } else { "" },
             html_escape(&e.name),
@@ -572,8 +618,8 @@ fn search_results(state: &State, rel: &[String], abs: &Path, pat: &str, recursiv
             href.push('/');
         }
         rows.push_str(&format!(
-            "<tr><td><span class=\"icon\">{}</span><a href=\"{}\">{}</a></td><td class=\"size\">{}</td><td class=\"time\">{}</td></tr>",
-            svg_icon(icon_for(&e.name, e.is_dir)),
+            "<tr><td>{}<a href=\"{}\">{}</a></td><td class=\"size\">{}</td><td class=\"time\">{}</td></tr>",
+            entry_icon(&e.name, e.is_dir),
             html_escape(&href),
             html_escape(&erel.join("/")),
             if e.is_dir {

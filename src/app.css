@@ -163,11 +163,11 @@ table.listing td.size, table.listing td.time, table.listing th.size, table.listi
   font-size: .85rem;
   text-align: right;
 }
-/* Drawn icons, so they take the row's colour: muted for a file, link-coloured
-   for a folder, which is the same distinction the names already make. */
+/* Drawn icons, so they take a colour: muted for a file, link-coloured for a
+   directory, which is the same distinction the names already make. */
 .icon { display: inline-block; width: 1.4rem; color: var(--muted); }
+.icon.dir { color: var(--link); }
 .icon svg { vertical-align: -3px; }
-table.listing tr:has(a.dir) .icon { color: var(--link); }
 
 form.filter { margin: 0 0 1rem; display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; max-width: 60rem; }
 form.filter input[type="text"] {

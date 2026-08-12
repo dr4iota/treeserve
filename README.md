@@ -139,10 +139,12 @@ Example: `treeserve -p 9000 ~/projects/notes`
   path are expanded, everything else is a link, so no JS is needed for
   expansion. Toggle with “Tree” in the header.
 - **Drawn icons, not typed ones.** Listing rows and header controls use inline
-  SVG paths that inherit the surrounding colour. The characters you would reach
-  for instead — folder, picture, film, note — are all in the emoji planes, and a
-  font stack without them (any DejaVu-only Linux, for one) draws a missing-glyph
-  box where the icon should be.
+  SVG paths that inherit the surrounding colour, so a directory's icon is
+  link-coloured and a file's is muted, and the theme flag shows the state it is
+  in: a sun for light, a moon for dark, half of each for following the system.
+  The characters you would reach for instead — folder, picture, film, note — are
+  all in the emoji planes, and a font stack without them (any DejaVu-only Linux,
+  for one) draws a missing-glyph box where the icon should be.
 - **Glob filter.** Each directory listing has a filter form (`*.rs`,
   `[a-c]*.md`, …) with an optional recursive mode. Patterns containing `/`
   match relative paths.
