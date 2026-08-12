@@ -95,6 +95,20 @@ static library, so `dist/windows/treesight.exe` travels with the
 `WebView2Loader.dll` next to it. `treeserve.exe` stays a single file. To get a
 one-file `treesight.exe` — or an installer — build on Windows with `build.bat`.
 
+**Copy the result to a Windows drive before running it.** Started in place, from
+`\\wsl.localhost\…\dist\windows\`, Windows sees an unsigned executable arriving
+from a network location: it puts up *“can’t verify who created this file”* and
+waits, Defender scans the whole image over WSL's 9P transport, and the image
+pages in the same way. Measured here, that is 100 seconds the first time and
+2.3 s once the scan is cached; the same binary under `C:\` answers in 0.19 s, and
+`treesight.exe` opens its window in 0.13 s. Which folder you *serve* costs
+nothing — serving the WSL tree from a binary on `C:` is as fast as anything else,
+because the server reads it through the same 9P mount either way.
+
+```sh
+mkdir -p /mnt/c/WinApps && cp dist/windows/* /mnt/c/WinApps/
+```
+
 For a macOS universal binary, build both architectures and join them:
 
 ```sh
