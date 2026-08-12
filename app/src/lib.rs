@@ -160,20 +160,42 @@ fn ask_for_folder(app: AppHandle, exit_if_cancelled: bool) {
 /// need: that list is fixed, and a Place that added itself to Recent would just
 /// be duplicating a shortcut the pane already shows.
 fn open_root(app: &AppHandle, dir: PathBuf, remember: bool) {
-    show_opening(app, &dir);
+    let previous = show_opening(app, &dir);
     let app = app.clone();
     thread::spawn(move || {
-        let resolved = dir.canonicalize().ok().filter(|d| d.is_dir());
+        let resolved = match dir.canonicalize() {
+            Ok(d) if d.is_dir() => Ok(d),
+            // There, and not a folder: as good as gone for our purposes.
+            Ok(_) => Err(RootStatus::Missing),
+            Err(e) => Err(classify(&e)),
+        };
         let back = app.clone();
         // Windows and server state are the main thread's to touch.
         let _ = app.run_on_main_thread(move || match resolved {
-            Some(dir) => serve_root(&back, dir, remember),
-            None => {
-                fail(&back, &format!("Not a folder: {}", dir.display()), false);
-                open_failed(&back);
+            Ok(dir) => serve_root(&back, dir, remember),
+            Err(status) => {
+                // The pane said what it knew when it was drawn; this is fresher,
+                // so record it before going back to a page that will show it.
+                if let Some(serving) = back.try_state::<Serving>() {
+                    serving.inner.state.cfg.set_root_status(dir.clone(), status);
+                }
+                fail(&back, &cannot_open(&dir, status), false);
+                open_failed(&back, previous);
             }
         });
     });
+}
+
+/// Why a folder did not open, in the words the pane uses for the same thing — so
+/// that a drive which the list calls "not available" is not called "missing" here.
+fn cannot_open(dir: &Path, status: RootStatus) -> String {
+    let path = treeserve::util::display_path(dir);
+    match status {
+        RootStatus::Unreachable => {
+            format!("{path} is not available.\n\nThe drive or share did not answer.")
+        }
+        _ => format!("{path} is no longer there."),
+    }
 }
 
 /// Points the window at a folder that has been resolved. Main thread only.
@@ -208,21 +230,19 @@ fn serve_root(app: &AppHandle, dir: PathBuf, remember: bool) {
     }
 }
 
-/// Says what is being opened, for as long as opening it takes.
+/// Says what is being opened, for as long as opening it takes, and hands back the
+/// page it replaced so a failed open can put it there again.
 ///
 /// Only with a window already on screen. Before that there is nothing to put it
 /// in, and a folder named on the command line is not something anybody is sitting
 /// there watching fail.
-fn show_opening(app: &AppHandle, dir: &Path) {
-    let Some(serving) = app.try_state::<Serving>() else {
-        return;
-    };
-    let Some(win) = app.get_webview_window(WINDOW) else {
-        return;
-    };
+fn show_opening(app: &AppHandle, dir: &Path) -> Option<tauri::Url> {
+    let serving = app.try_state::<Serving>()?;
+    let win = app.get_webview_window(WINDOW)?;
     if !win.is_visible().unwrap_or(false) {
-        return;
+        return None;
     }
+    let previous = win.url().ok();
     let url = format!(
         "{}/.ts/wait?path={}",
         serving.origin,
@@ -231,19 +251,17 @@ fn show_opening(app: &AppHandle, dir: &Path) {
     if let Ok(url) = url.parse() {
         let _ = win.navigate(url);
     }
+    previous
 }
 
-/// After an open that did not happen: back to the folder still being served.
-/// With nothing on screen yet — a bad path on the command line — there is nothing
-/// to go back to, so ask for one instead of leaving a window that never appears.
-fn open_failed(app: &AppHandle) {
-    match app.get_webview_window(WINDOW) {
-        Some(win) if win.is_visible().unwrap_or(false) => {
-            if let Some(serving) = app.try_state::<Serving>()
-                && let Ok(url) = format!("{}/", serving.origin).parse()
-            {
-                let _ = win.navigate(url);
-            }
+/// After an open that did not happen: back to the exact page that was on screen,
+/// rather than to the served root — nothing was re-rooted, so nobody should lose
+/// their place over it. With nothing on screen to go back to — a bad path on the
+/// command line — ask for a folder instead of leaving a window that never appears.
+fn open_failed(app: &AppHandle, previous: Option<tauri::Url>) {
+    match (app.get_webview_window(WINDOW), previous) {
+        (Some(win), Some(url)) => {
+            let _ = win.navigate(url);
         }
         _ => ask_for_folder(app.clone(), true),
     }
@@ -405,10 +423,7 @@ fn check_roots(app: &AppHandle) {
                         Ok(m) if m.is_dir() => RootStatus::Ok,
                         // Something is there, but not a folder any more.
                         Ok(_) => RootStatus::Missing,
-                        Err(e) if e.kind() == io::ErrorKind::NotFound => RootStatus::Missing,
-                        // Everything else is the drive or the share declining to
-                        // say: not ready, host gone, permission refused.
-                        Err(_) => RootStatus::Unreachable,
+                        Err(e) => classify(&e),
                     };
                     state.cfg.set_root_status(path.clone(), status);
                     (path, status)
@@ -451,6 +466,44 @@ fn check_roots(app: &AppHandle) {
             });
         }
     });
+}
+
+/// What an error from looking at a path means for the pane, and for what we tell
+/// anyone who clicked it.
+///
+/// `ErrorKind` alone gets this wrong, and did: a mapped drive whose host is off
+/// answers `ERROR_BAD_NETPATH`, which std folds into `NotFound` — the same kind a
+/// deleted folder gives — so `Z:` reported itself as *missing*, which says the
+/// share is empty when what happened is that nobody answered. The codes that mean
+/// "ask again later" are named here instead, and the kind is only the fallback.
+fn classify(e: &io::Error) -> RootStatus {
+    if unreachable_code(e) {
+        return RootStatus::Unreachable;
+    }
+    match e.kind() {
+        io::ErrorKind::NotFound => RootStatus::Missing,
+        // A drive that is not ready, a folder we may not look into: something is
+        // there, we just cannot see it. Not the same as gone.
+        _ => RootStatus::Unreachable,
+    }
+}
+
+/// ERROR_NOT_READY, ERROR_BAD_NETPATH, ERROR_DEV_NOT_EXIST, ERROR_UNEXP_NET_ERR,
+/// ERROR_NETNAME_DELETED, ERROR_BAD_NET_NAME, ERROR_NO_NET_OR_BAD_PATH,
+/// ERROR_NETWORK_UNREACHABLE.
+#[cfg(windows)]
+fn unreachable_code(e: &io::Error) -> bool {
+    matches!(
+        e.raw_os_error(),
+        Some(21 | 53 | 55 | 59 | 64 | 67 | 1222 | 1231)
+    )
+}
+
+/// ENODEV, ENETDOWN, ENETUNREACH, ETIMEDOUT, EHOSTDOWN, EHOSTUNREACH, ESTALE —
+/// the same answer from an NFS or SMB mount whose server has gone.
+#[cfg(not(windows))]
+fn unreachable_code(e: &io::Error) -> bool {
+    matches!(e.raw_os_error(), Some(19 | 100 | 101 | 110 | 112 | 113 | 116))
 }
 
 /// Drops paths from the Recent file, leaving everything else as it is — the file
@@ -709,4 +762,27 @@ fn remember_root(app: &AppHandle, root: &Path) {
     }
     let text: String = list.iter().map(|p| format!("{}\n", p.display())).collect();
     let _ = fs::write(file, text);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The distinction the pane makes, and the one `ErrorKind` cannot make on its
+    /// own: a folder someone deleted is gone, and a share whose host is off is not
+    /// gone, it is unreachable. Windows answers the second with `ERROR_BAD_NETPATH`,
+    /// which std reports as `NotFound` — the same kind as the first.
+    #[test]
+    fn deleted_is_missing_and_a_dead_mount_is_not() {
+        // ENOENT, and ERROR_FILE_NOT_FOUND, which share the number 2.
+        assert_eq!(classify(&io::Error::from_raw_os_error(2)), RootStatus::Missing);
+
+        // ERROR_BAD_NETPATH on Windows, ESTALE elsewhere: the mount is there and
+        // the server is not.
+        let dead = if cfg!(windows) { 53 } else { 116 };
+        assert_eq!(
+            classify(&io::Error::from_raw_os_error(dead)),
+            RootStatus::Unreachable
+        );
+    }
 }
