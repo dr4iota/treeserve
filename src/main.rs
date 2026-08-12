@@ -21,7 +21,7 @@ OPTIONS:
     -p, --port PORT        port to listen on (default: 8080)
     -t, --theme MODE       default theme: auto | light | dark (default: auto)
         --no-line-numbers  line numbers off by default
-        --no-sidebar       file tree sidebar off by default
+        --no-sidebar       side pane off by default
         --hidden           show dotfiles
         --title NAME       site title (default: root directory name)
         --threads N        worker threads (default: 8)

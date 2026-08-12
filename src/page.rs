@@ -304,19 +304,23 @@ pub fn layout(
             },
         ));
     }
-    let (tree_label, tree_val, tree_title) = if prefs.sidebar {
-        ("Tree: on", "0", "File tree shown — click to hide")
+    // The switch is the pane, not the tree inside it: with the pane on, the tree
+    // is what it is for and is always there, and with the pane off the listing
+    // has the window. A switch for the tree alone would have left an empty
+    // column behind, which is neither of the two things anyone wants.
+    let (pane_label, pane_val, pane_title) = if prefs.sidebar {
+        ("Pane: on", "0", "Side pane shown — click to hide")
     } else {
-        ("Tree: off", "1", "File tree hidden — click to show")
+        ("Pane: off", "1", "Side pane hidden — click to show")
     };
-    // `treeflag`: the stylesheet drops this one at the width where the pane it
+    // `paneflag`: the stylesheet drops this one at the width where the pane it
     // switches is gone, rather than leaving a switch with nothing on the end.
     controls.push_str(&flag(
-        "treeflag",
-        &set_href("sidebar", tree_val, url_now),
+        "paneflag",
+        &set_href("sidebar", pane_val, url_now),
         &svg_icon(&icon_pane(prefs.sidebar)),
-        tree_label,
-        tree_title,
+        pane_label,
+        pane_title,
     ));
     let (theme_icon, theme_title) = match prefs.theme {
         ThemeMode::Auto => (
@@ -361,11 +365,12 @@ pub fn layout(
     };
     let body_class = if state.cfg.app_ui { " class=\"app\"" } else { "" };
 
-    // In the shell the pane also holds Places, Recent and the picker button, so
-    // it stays even with the tree off; served on its own it is the tree or
-    // nothing, exactly as before.
-    let sidebar = if prefs.sidebar || state.cfg.app_ui {
-        pane_html(state, prefs, rel)
+    // One switch, one thing: the pane is either there with everything in it or
+    // not there at all. In the shell that takes Places and Recent with it, which
+    // is the honest trade for a full-width listing — the picker they are
+    // shortcuts to is in the status line, and that line is always on screen.
+    let sidebar = if prefs.sidebar {
+        pane_html(state, rel)
     } else {
         String::new()
     };
@@ -419,18 +424,16 @@ pub fn layout(
 const TREE_MAX_PER_DIR: usize = 150;
 
 /// The left pane: the directory tree, and in the desktop shell the Places and
-/// Recent shortcuts above it plus the folder picker pinned below.
+/// Recent shortcuts below it plus the folder picker.
 ///
-/// Keeps the `nav.tree` element even when it holds more than the tree, so one
-/// stylesheet rule still hides the whole pane on narrow screens.
-fn pane_html(state: &State, prefs: Prefs, cur: &[String]) -> String {
+/// Only called when the pane is on, and then it always has its tree — the flag
+/// in the header is the pane itself, all of it or none.
+fn pane_html(state: &State, cur: &[String]) -> String {
     let mut out = String::from("<nav class=\"tree\">");
     // The tree first and foremost: it is what the pane is for, and it is what
     // grows, so it takes the height and the shortcuts below settle for what is
     // left.
-    if prefs.sidebar {
-        tree_dir(state, &state.cfg.root(), &mut Vec::new(), cur, &mut out);
-    }
+    tree_dir(state, &state.cfg.root(), &mut Vec::new(), cur, &mut out);
     if state.cfg.app_ui {
         out.push_str("<div class=\"chooser\">");
         // Two paths on purpose: opening a Place is not something Recent should
@@ -441,14 +444,17 @@ fn pane_html(state: &State, prefs: Prefs, cur: &[String]) -> String {
             "places",
             "Places",
             "/.ts/place",
-            state.cfg.places.iter().cloned(),
+            state.cfg.places.iter().map(|(l, p)| (Some(l.clone()), p.clone())),
         );
+        // No label, so each of these is drawn as its path: a Place is somewhere
+        // with a name, a Recent is just a folder you were in, and which one it
+        // was is a question about where it sits.
         root_list(
             &mut out,
             "recent",
             "Recent",
             "/.ts/root",
-            state.cfg.recent().iter().map(|p| (root_label(p), p.clone())),
+            state.cfg.recent().iter().map(|p| (None, p.clone())),
         );
         out.push_str("</div>");
     }
@@ -457,8 +463,9 @@ fn pane_html(state: &State, prefs: Prefs, cur: &[String]) -> String {
 }
 
 /// One pane section of "serve this folder instead" links. `action` is the path
-/// the shell recognises, which is also how it tells a Place from a Recent.
-fn root_list<I: Iterator<Item = (String, PathBuf)>>(
+/// the shell recognises, which is also how it tells a Place from a Recent. An
+/// item with no label is drawn as its path, by `path_label`.
+fn root_list<I: Iterator<Item = (Option<String>, PathBuf)>>(
     out: &mut String,
     class: &str,
     heading: &str,
@@ -473,7 +480,10 @@ fn root_list<I: Iterator<Item = (String, PathBuf)>>(
                 action,
                 percent_encode(&full),
                 html_escape(&full),
-                html_escape(&label)
+                match &label {
+                    Some(l) => html_escape(l),
+                    None => path_label(&full),
+                }
             )
         })
         .collect();
@@ -486,12 +496,26 @@ fn root_list<I: Iterator<Item = (String, PathBuf)>>(
     ));
 }
 
-/// Short name for a remembered root: its own name, or the whole path for a
-/// filesystem or drive root, which has no file name to show.
-fn root_label(p: &Path) -> String {
-    match p.file_name() {
-        Some(n) => n.to_string_lossy().into_owned(),
-        None => display_path(p),
+/// A remembered root split into the path above it and the folder itself, so the
+/// pane can show as many levels as it has room for and drop the middle of the
+/// rest. The name is the part that identifies the entry, so it is the part that
+/// never goes: the stylesheet ellipsises the head and leaves the leaf alone.
+///
+/// Splitting here rather than measuring anywhere is what keeps this a static
+/// page. How much of `/home/hanhua/mix` survives is a question about the width
+/// of a rendered box, and CSS is the only thing on either side of the wire that
+/// knows that — the server would have to guess at a font it cannot see.
+fn path_label(full: &str) -> String {
+    match full.rfind(|c| c == '/' || c == '\\') {
+        // A separator with something after it: everything up to and including it
+        // is the head. A trailing one means a filesystem or drive root, which is
+        // all leaf and has no name of its own to show.
+        Some(i) if i + 1 < full.len() => format!(
+            "<span class=\"head\">{}</span><span class=\"leaf\">{}</span>",
+            html_escape(&full[..=i]),
+            html_escape(&full[i + 1..])
+        ),
+        _ => format!("<span class=\"leaf\">{}</span>", html_escape(full)),
     }
 }
 

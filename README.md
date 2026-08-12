@@ -1,7 +1,7 @@
 # treeserve
 
 A single-binary file server in the spirit of `webfsd`, but with server-side
-rendering: directory browsing with a file tree sidebar, syntax-highlighted
+rendering: directory browsing with a file tree side pane, syntax-highlighted
 code, rendered Markdown, inline image/video/audio/PDF preview, and dark/light
 themes. Plain HTML output, zero JavaScript, no runtime dependencies.
 
@@ -128,7 +128,7 @@ treeserve [OPTIONS] [ROOT]
   -p, --port PORT        port to listen on (default: 8080)
   -t, --theme MODE       default theme: auto | light | dark (default: auto)
       --no-line-numbers  line numbers off by default
-      --no-sidebar       file tree sidebar off by default
+      --no-sidebar       side pane off by default
       --hidden           show dotfiles
       --title NAME       site title (default: root directory name)
       --threads N        worker threads (default: 8)
@@ -147,11 +147,13 @@ Example: `treeserve -p 9000 ~/projects/notes`
 ## Features
 
 - **Server-side rendering, zero JS.** Every page is plain HTML + CSS.
-  Toggles (theme, line numbers, sidebar) are links that set a cookie via
+  Toggles (theme, line numbers, side pane) are links that set a cookie via
   `/.ts/set` and redirect back.
-- **File tree sidebar.** Rendered on the server; directories on the current
+- **File tree side pane.** Rendered on the server; directories on the current
   path are expanded, everything else is a link, so no JS is needed for
-  expansion. Toggle with “Tree” in the header.
+  expansion. “Pane” in the header switches the whole pane, not the tree within
+  it: the tree is what the pane is for, so turning it off gives the listing the
+  full window rather than leaving an empty column.
 - **Drawn icons, not typed ones.** Listing rows and header controls use inline
   SVG paths that inherit the surrounding colour, so a directory's icon is
   link-coloured and a file's is muted, and the theme flag shows the state it is
@@ -243,7 +245,7 @@ cargo run -p treesight -- [FOLDER]     # dev run
   that being the one line which is always there.
 - **One screen, three regions.** The shell lays itself out as an app rather than
   as a long document: the header and the status line stay where they are, and
-  the sidebar and the listing scroll independently, so following a deep tree
+  the side pane and the listing scroll independently, so following a deep tree
   never scrolls the file you are reading off the top. A page in a browser keeps
   scrolling like a page, which is what a browser's own chrome expects.
 - **Downloads** don't go through the webview's download stack, which is invisible

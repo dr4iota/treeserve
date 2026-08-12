@@ -126,7 +126,7 @@ header {
    icon it has been dead for a while. Hence one rule at the pane's own width,
    and no icon form of this flag that anyone ever gets to see. */
 @media (max-width: 50rem) {
-  .controls a.treeflag { display: none; }
+  .controls a.paneflag { display: none; }
 }
 
 .shell { display: flex; align-items: stretch; flex: 1; min-height: 0; }
@@ -165,6 +165,25 @@ nav.tree a:hover { background: var(--border); text-decoration: none; }
 nav.tree a.dir { color: var(--link); }
 nav.tree .cur > a { font-weight: 700; background: var(--border); }
 nav.tree .more { color: var(--muted); font-style: italic; }
+/* A Recent shows as much of its path as the pane is wide, which is a length only
+   the browser knows: the server sends the whole thing split in two and the
+   ellipsis lands wherever it has to. The leaf is the folder's own name and never
+   shrinks, so what goes is the middle of the path above it — `/home/hanhua/mix/`
+   thinning towards `/home/…/` as the pane narrows, with `tree` still on the end.
+   Two boxes in a row, no measuring, and it re-lays itself out on a window drag
+   without the page knowing. The two boxes sit flush against each other, so the
+   slack you can see before a leaf on a clipped row is inside the head: an
+   ellipsis lands after the last character that fits, and what the next one
+   needed goes unused. At most one character, and the price of not measuring. */
+nav.tree .chooser a { display: flex; }
+nav.tree .chooser .head {
+  color: var(--muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+nav.tree .chooser .leaf { flex: 0 0 auto; }
 
 main { flex: 1; min-width: 0; padding: 1rem 1.25rem 3rem; }
 
