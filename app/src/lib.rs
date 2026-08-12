@@ -66,29 +66,26 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let handle = app.handle().clone();
+            // The server and the window go up first, hidden, on a placeholder root
+            // that is never seen. Creating the window is the one slow thing left in
+            // a cold start — WebView2 spawning its processes, and on a first ever
+            // run laying down its user-data folder — and it used to be spent after
+            // the folder was settled, with nothing on screen to show for it. Now it
+            // overlaps whatever settles the folder, which is either the user
+            // reading a dialog or a drive making up its mind. Loading a real page
+            // into it is deliberate too: the stylesheet and the layout are warm by
+            // the time there is something to paint.
+            if let Err(e) = start(&handle, placeholder_root(&handle)) {
+                fail(&handle, &e, true);
+                return Ok(());
+            }
             match first_dir_arg(std::env::args().skip(1)) {
                 // Started from a shell with a path, or via a shell verb.
                 Some(dir) => open_root(&handle, dir, true),
-                // Started by double-click: the working directory is wherever
-                // the shell happened to put us, which is never what the user
-                // meant, so ask which folder to browse.
-                //
-                // The window goes up first, hidden. Creating it is the one slow
-                // thing left in a cold start — WebView2 spawning its processes,
-                // and on a first ever run laying down its user-data folder — and
-                // it used to be spent *after* the folder was chosen, with nothing
-                // on screen to show for it. Now it happens while the picker is
-                // up, which is time the app was going to spend waiting anyway.
-                // The placeholder root is never seen: `open_root` re-roots and
-                // navigates before it shows the window. Loading a real page into
-                // it is deliberate too — the stylesheet, the fonts and the layout
-                // are all warm by the time there is something to paint.
-                None => {
-                    if let Err(e) = start(&handle, placeholder_root(&handle)) {
-                        fail(&handle, &e, true);
-                    }
-                    ask_for_folder(handle, true);
-                }
+                // Started by double-click: the working directory is wherever the
+                // shell happened to put us, which is never what the user meant, so
+                // ask which folder to browse.
+                None => ask_for_folder(handle, true),
             }
             Ok(())
         })
@@ -150,19 +147,37 @@ fn ask_for_folder(app: AppHandle, exit_if_cancelled: bool) {
     });
 }
 
-/// Serves `dir`: starts the server on first use, re-roots it afterwards.
+/// Serves `dir`, resolving it off the UI thread.
+///
+/// `canonicalize` is a syscall with no time limit. A drive letter mapped to a host
+/// that is switched off takes as long as the redirector takes to give up — twenty
+/// seconds, measured — and this used to run inside `on_navigation`, which is the
+/// main thread: the whole window froze, including the part of it that would have
+/// said why. So the waiting happens on a thread, the window says what it is
+/// opening while that goes on, and it comes back either way.
 ///
 /// `remember` keeps it out of the Recent list, which is what the pane's Places
 /// need: that list is fixed, and a Place that added itself to Recent would just
 /// be duplicating a shortcut the pane already shows.
 fn open_root(app: &AppHandle, dir: PathBuf, remember: bool) {
-    let dir = match dir.canonicalize() {
-        Ok(d) if d.is_dir() => d,
-        _ => {
-            fail(app, &format!("Not a folder: {}", dir.display()), false);
-            return;
-        }
-    };
+    show_opening(app, &dir);
+    let app = app.clone();
+    thread::spawn(move || {
+        let resolved = dir.canonicalize().ok().filter(|d| d.is_dir());
+        let back = app.clone();
+        // Windows and server state are the main thread's to touch.
+        let _ = app.run_on_main_thread(move || match resolved {
+            Some(dir) => serve_root(&back, dir, remember),
+            None => {
+                fail(&back, &format!("Not a folder: {}", dir.display()), false);
+                open_failed(&back);
+            }
+        });
+    });
+}
+
+/// Points the window at a folder that has been resolved. Main thread only.
+fn serve_root(app: &AppHandle, dir: PathBuf, remember: bool) {
     if remember {
         remember_root(app, &dir);
     }
@@ -175,9 +190,9 @@ fn open_root(app: &AppHandle, dir: PathBuf, remember: bool) {
             if let Ok(url) = format!("{}/", serving.origin).parse() {
                 let _ = win.navigate(url);
             }
-            // It may still be hidden: on a double-click start the window is
-            // built while the picker is up, and this is the first moment there
-            // is a folder to put in it. Idempotent for every later re-root.
+            // It may still be hidden: the window is built while the picker is up,
+            // and this is the first moment there is a folder to put in it.
+            // Idempotent for every later re-root.
             show(&win);
         }
         return;
@@ -190,6 +205,47 @@ fn open_root(app: &AppHandle, dir: PathBuf, remember: bool) {
             }
         }
         Err(e) => fail(app, &e, true),
+    }
+}
+
+/// Says what is being opened, for as long as opening it takes.
+///
+/// Only with a window already on screen. Before that there is nothing to put it
+/// in, and a folder named on the command line is not something anybody is sitting
+/// there watching fail.
+fn show_opening(app: &AppHandle, dir: &Path) {
+    let Some(serving) = app.try_state::<Serving>() else {
+        return;
+    };
+    let Some(win) = app.get_webview_window(WINDOW) else {
+        return;
+    };
+    if !win.is_visible().unwrap_or(false) {
+        return;
+    }
+    let url = format!(
+        "{}/.ts/wait?path={}",
+        serving.origin,
+        treeserve::util::percent_encode(&treeserve::util::display_path(dir))
+    );
+    if let Ok(url) = url.parse() {
+        let _ = win.navigate(url);
+    }
+}
+
+/// After an open that did not happen: back to the folder still being served.
+/// With nothing on screen yet — a bad path on the command line — there is nothing
+/// to go back to, so ask for one instead of leaving a window that never appears.
+fn open_failed(app: &AppHandle) {
+    match app.get_webview_window(WINDOW) {
+        Some(win) if win.is_visible().unwrap_or(false) => {
+            if let Some(serving) = app.try_state::<Serving>()
+                && let Ok(url) = format!("{}/", serving.origin).parse()
+            {
+                let _ = win.navigate(url);
+            }
+        }
+        _ => ask_for_folder(app.clone(), true),
     }
 }
 
@@ -329,6 +385,7 @@ fn check_roots(app: &AppHandle) {
     };
     let state = Arc::clone(&serving.inner.state);
     let file = recent_file(app);
+    let app = app.clone();
     thread::spawn(move || {
         let recent = state.cfg.recent();
         let paths: Vec<PathBuf> = state
@@ -359,14 +416,39 @@ fn check_roots(app: &AppHandle) {
             })
             .collect();
 
-        let gone: Vec<PathBuf> = checks
-            .into_iter()
-            .filter_map(|h| h.join().ok())
+        let answers: Vec<(PathBuf, RootStatus)> =
+            checks.into_iter().filter_map(|h| h.join().ok()).collect();
+
+        let gone: Vec<PathBuf> = answers
+            .iter()
             .filter(|(path, status)| *status != RootStatus::Ok && recent.contains(path))
-            .map(|(path, _)| path)
+            .map(|(path, _)| path.clone())
             .collect();
         if let (Some(file), false) = (file, gone.is_empty()) {
             prune_recent(&file, &gone);
+        }
+
+        // The page on screen went out before these answers arrived and cannot show
+        // them: it is static, and there is no script in it to change its mind. A
+        // fast answer beats the first render anyway — an empty DVD drive says
+        // "not ready" at once — but the twenty-second ones land long after, which
+        // looked like the checks not happening at all. So the shell asks the window
+        // to load itself again, which re-renders the pane; the page stays as static
+        // as it was, and the one asking is the shell, as it is for the keyboard
+        // shortcuts. Once, and only if an answer changed anything, since a reload
+        // costs the reader their scroll position. Not while something has focus,
+        // which would cost them what they had typed into it.
+        if answers.iter().any(|(_, status)| *status != RootStatus::Ok) {
+            let back = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                if let Some(win) = back.get_webview_window(WINDOW) {
+                    let _ = win.eval(
+                        "var a = document.activeElement; \
+                         if (!a || (a.tagName !== 'INPUT' && a.tagName !== 'TEXTAREA')) \
+                         location.reload();",
+                    );
+                }
+            });
         }
     });
 }

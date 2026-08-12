@@ -420,6 +420,17 @@ fn respond(state: &State, rq: Request) {
             set_prefs(rq, &query);
             return;
         }
+        // Somewhere for the shell to park the window while it finds out whether a
+        // folder opens. Only it ever navigates here, and only when `app_ui` is on;
+        // served on its own this is a page about nothing.
+        "/.ts/wait" if state.cfg.app_ui => {
+            let path = query_get(&query, "path").unwrap_or_default();
+            let _ = rq.respond(html_resp(
+                200,
+                page::wait_page(state, prefs, &url_now, path),
+            ));
+            return;
+        }
         _ => {}
     }
 

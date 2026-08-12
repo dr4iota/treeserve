@@ -155,6 +155,10 @@ fn icon_pane(on: bool) -> String {
     )
 }
 
+/// "Serve this folder as the root": an arrow going in through the side of a frame.
+const ICON_AS_ROOT: &str = "<path d=\"M9.8 3.4h2.8v9.2H9.8\"/><path d=\"M3.4 8h5.8\"/>\
+     <path d=\"M6.8 5.6L9.2 8l-2.4 2.4\"/>";
+
 /// Line numbers: the lines they count, with the numbers beside them when they are
 /// on. Presence, not fill, for this one — the marks in the gutter *are* the
 /// numbers, so drawing them is what "on" means and anything else reads backwards.
@@ -551,6 +555,28 @@ fn path_label(full: &str) -> String {
     }
 }
 
+/// The "serve this folder instead" button on a directory row in the tree.
+///
+/// Clicking the name walks into a directory; this re-roots to it, which is the
+/// thing you cannot otherwise do without the picker and a path you have already
+/// got on screen. It goes through `/.ts/root`, the same link a Recent uses, so the
+/// shell remembers it in Recent exactly as it would any other opened root.
+///
+/// Only in the shell. Nothing else can act on it: the server has no such route,
+/// and a page served over a network has no business offering one.
+fn as_root_link(state: &State, abs: &Path) -> String {
+    if !state.cfg.app_ui {
+        return String::new();
+    }
+    let full = display_path(abs);
+    format!(
+        "<a class=\"asroot\" href=\"/.ts/root?path={}\" title=\"Serve {} as the root\">{}</a>",
+        percent_encode(&full),
+        html_escape(&full),
+        svg_icon(ICON_AS_ROOT)
+    )
+}
+
 fn tree_dir(state: &State, abs: &Path, rel: &mut Vec<String>, cur: &[String], out: &mut String) {
     let entries = read_dir_sorted(state, abs);
     let total = entries.len();
@@ -563,15 +589,20 @@ fn tree_dir(state: &State, abs: &Path, rel: &mut Vec<String>, cur: &[String], ou
         let cls = if is_cur { " class=\"cur\"" } else { "" };
         if e.is_dir {
             let arrow = if on_path { "&#x25BE;" } else { "&#x25B8;" };
+            let child_abs = abs.join(&e.name);
+            // The name and the button share a row of their own, so an expanded
+            // directory's children hang below it rather than beside the button,
+            // and a long name ellipsises against the button instead of pushing it
+            // off the pane.
             out.push_str(&format!(
-                "<li{}><a class=\"dir\" href=\"{}/\">{} {}/</a>",
+                "<li{}><span class=\"row\"><a class=\"dir\" href=\"{}/\">{} {}/</a>{}</span>",
                 cls,
                 html_escape(&href),
                 arrow,
-                html_escape(&e.name)
+                html_escape(&e.name),
+                as_root_link(state, &child_abs)
             ));
             if on_path {
-                let child_abs = abs.join(&e.name);
                 tree_dir(state, &child_abs, rel, cur, out);
             }
             out.push_str("</li>");
@@ -765,6 +796,23 @@ pub fn listing_text(state: &State, abs: &Path) -> String {
         out.push('\n');
     }
     out
+}
+
+/// Shown while the shell is finding out whether a folder can be opened.
+///
+/// Resolving a path is a syscall with no time limit — a drive letter mapped to a
+/// host that is off takes as long as the network stack takes to give up — so the
+/// shell does it on a thread and parks the window here meanwhile. Still the served
+/// root's page furniture, because that is still what is being served: only the
+/// middle of the window is waiting.
+pub fn wait_page(state: &State, prefs: Prefs, url_now: &str, path: &str) -> String {
+    let content = format!(
+        "<div class=\"bigmsg\"><p>Opening {}&hellip;</p>\
+         <p>If the folder is on a drive or a share that is not answering, this waits \
+         for as long as that takes to find out.</p></div>",
+        html_escape(path)
+    );
+    layout(state, prefs, &[], url_now, "", false, &content)
 }
 
 pub fn error_page(state: &State, prefs: Prefs, rel: &[String], url_now: &str, code: u32, msg: &str) -> String {

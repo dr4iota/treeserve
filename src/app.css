@@ -142,31 +142,62 @@ nav.tree {
   overflow-x: hidden;
   font-size: .85rem;
 }
+/* PLACES and RECENT are titles, and at .7rem muted with a hairline of margin they
+   read as one more line of the list they head. A bar across the pane says section
+   without needing a bigger typeface than the pane can afford: it bleeds through
+   the pane's own side padding to span the full width, which is also what makes it
+   read as a bar rather than a highlighted word. */
 nav.tree section h2 {
   font: inherit;
-  font-size: .7rem;
-  letter-spacing: .06em;
+  font-size: .75rem;
+  font-weight: 600;
+  letter-spacing: .05em;
   text-transform: uppercase;
   color: var(--muted);
-  margin: 0 0 .15rem .2rem;
+  background: var(--border);
+  margin: .5rem -.5rem .35rem;
+  padding: .25rem .6rem;
 }
 nav.tree section ul { padding-left: .2rem; }
 /* Places, Recent and the picker follow the tree in one scroll, rather than
    holding a strip of the pane the tree could have used. On a tree of any size
    they start out below the fold, which is where shortcuts you reach for now and
    then belong. */
-nav.tree .chooser {
-  margin-top: .8rem;
-  border-top: 1px solid var(--border);
-  padding-top: .5rem;
-}
+/* No rule across the top any more: the first section's own bar is the line that
+   separates the shortcuts from the tree, and two of them together read as a
+   double rule. */
+nav.tree .chooser { margin-top: .8rem; }
 nav.tree ul { list-style: none; margin: 0; padding-left: .9rem; }
 nav.tree > ul { padding-left: .2rem; }
 nav.tree li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 nav.tree a { color: var(--fg); display: inline-block; padding: .05rem .2rem; border-radius: 4px; }
 nav.tree a:hover { background: var(--border); text-decoration: none; }
 nav.tree a.dir { color: var(--link); }
-nav.tree .cur > a { font-weight: 700; background: var(--border); }
+/* A directory row: the name takes the width and gives it back with an ellipsis,
+   the re-root button keeps its own. Quiet until the row is under the pointer,
+   because the space is reserved either way and a column of bright arrows down a
+   narrow pane is a column of arrows, not a tree. */
+nav.tree li .row { display: flex; align-items: center; }
+nav.tree li .row > a.dir {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+nav.tree a.asroot {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 0 .15rem;
+  line-height: 1;
+  color: var(--muted);
+  opacity: .4;
+}
+nav.tree .row:hover a.asroot { opacity: 1; }
+nav.tree a.asroot:hover { color: var(--link); background: none; }
+/* The row wrapper sits between the `li` and its link on a directory, so the
+   current one is reached through either shape. */
+nav.tree .cur > a, nav.tree .cur > .row > a { font-weight: 700; background: var(--border); }
 nav.tree .more { color: var(--muted); font-style: italic; }
 /* A path shows as much of itself as its box is wide, which is a length only the
    browser knows: the server sends the whole thing split in two and the ellipsis
@@ -189,34 +220,53 @@ nav.tree .more { color: var(--muted); font-style: italic; }
    character that fits, and what the next one needed goes unused. At most one
    character, and the price of not measuring. */
 nav.tree .chooser a, footer .where { display: flex; }
-nav.tree .chooser .head, footer .where .head {
+nav.tree .chooser .head, footer .where .head,
+nav.tree .chooser .leaf, footer .where .leaf {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-nav.tree .chooser .leaf, footer .where .leaf { flex: 0 0 auto; }
+/* The head gives up its width first and by a thousand to one, which is how "the
+   name never shrinks" is said in a language that has no way to say it outright.
+   The leaf can shrink, but only once the head is down to nothing — and then it
+   ellipsises rather than being cut off at the edge of the pane, which is what a
+   leaf that could not shrink at all did. */
+/* Enough width left for the ellipsis itself, or a head squeezed to nothing shows
+   nothing and the path looks like it starts where it does not. */
+nav.tree .chooser .head, footer .where .head { flex-shrink: 1000; min-width: .8rem; }
+nav.tree .chooser .leaf, footer .where .leaf { flex: 0 1 auto; }
 nav.tree .chooser .head { color: var(--muted); }
 /* A shortcut whose check came back badly. The lists are drawn before anything is
    checked — a check can block for as long as a dead network drive takes to admit
    it — so this is what an answer looks like when it arrives: the entry dimmed to
    the weight of the path above it, and a word for what went wrong.
                                                                        [continued]
-   The word sits out at the right of the entry's own line and drops to the next
-   one only when it will not fit, which is the flex line break doing it: the entry
-   may shrink (it has an ellipsis for that) but not past the name, so when the
-   name and the word together outrun the pane there is nothing left to give and
-   they take a line each. Right-aligned either way, so a column of them reads
-   down the edge. */
+   The word sits out at the right of the entry's own line, and stays there: the
+   entry gives up width to it instead, since both halves of a path can ellipsise
+   and there is therefore no width at which one line does not fit. Wrapping was
+   the first answer and it was the wrong one twice — a flex line breaks on the
+   items' natural widths, before any shrinking, so a long path pushed its word to
+   a second line no matter how much room shrinking could have found. */
 nav.tree .chooser li.gone {
   display: flex;
-  flex-wrap: wrap;
   align-items: baseline;
 }
 /* Dimmed, and that is all: the grey and the word beside it already say it. An
    italic went here first, until a Windows leaf showed what italic does to a
    leading backslash — `\Documents` set as `|Documents`. */
-nav.tree .chooser li.gone > a { flex: 1 1 auto; color: var(--muted); }
+/* The entry gives up width so the word can sit beside it. `min-width: 0` is what
+   lets it: the default floor is the entry's own content, which does not shrink at
+   all and gets cut off at the pane's edge instead. A floor in `rem` was worse
+   again — `min-width` clamps upwards as well, so `E:` was held out to seven
+   characters and pushed its own word onto a second line. Nothing needs to wrap
+   now: both halves of the path can ellipsise, so there is no width at which this
+   does not fit. */
+nav.tree .chooser li.gone > a {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--muted);
+}
 nav.tree .chooser .why {
   flex: 0 0 auto;
   margin-left: auto;
