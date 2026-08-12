@@ -411,11 +411,17 @@ pub fn layout(
         controls = controls,
         sidebar = sidebar,
         content = content,
+        // The served root gets the same head-and-leaf treatment as a Recent, and
+        // for the same reason: what a plain ellipsis drops off the end of a path
+        // is the folder you are actually in. The version goes first in the line
+        // and last in importance, so it is what leaves when the line is short.
         footer = format!(
-            "<span class=\"where\">{} v{} &middot; {}</span>{}",
+            "<span class=\"where\" title=\"{0}\"><span class=\"app\">{1} v{2} &middot;</span>{3}</span>\
+             {4}",
+            html_escape(&display_path(&state.cfg.root())),
             env!("CARGO_PKG_NAME"),
             env!("CARGO_PKG_VERSION"),
-            html_escape(&display_path(&state.cfg.root())),
+            path_label(&display_path(&state.cfg.root())),
             pick
         ),
     )
@@ -441,6 +447,7 @@ fn pane_html(state: &State, cur: &[String]) -> String {
         // one. Opening something from Recent does move it back to the top.
         root_list(
             &mut out,
+            state,
             "places",
             "Places",
             "/.ts/place",
@@ -451,6 +458,7 @@ fn pane_html(state: &State, cur: &[String]) -> String {
         // was is a question about where it sits.
         root_list(
             &mut out,
+            state,
             "recent",
             "Recent",
             "/.ts/root",
@@ -465,8 +473,15 @@ fn pane_html(state: &State, cur: &[String]) -> String {
 /// One pane section of "serve this folder instead" links. `action` is the path
 /// the shell recognises, which is also how it tells a Place from a Recent. An
 /// item with no label is drawn as its path, by `path_label`.
+///
+/// An entry whose check has come back badly is greyed and says what happened,
+/// and stays a link: the check is a snapshot from whenever it ran, a drive that
+/// was not ready can be ready now, and the only way to find out is to ask for
+/// it. Clicking one costs whatever the wait costs, which is the same wait the
+/// list used to charge everybody up front.
 fn root_list<I: Iterator<Item = (Option<String>, PathBuf)>>(
     out: &mut String,
+    state: &State,
     class: &str,
     heading: &str,
     action: &str,
@@ -475,14 +490,20 @@ fn root_list<I: Iterator<Item = (Option<String>, PathBuf)>>(
     let links: String = items
         .map(|(label, path)| {
             let full = display_path(&path);
+            let note = state.cfg.root_status(&path).note();
             format!(
-                "<li><a href=\"{}?path={}\" title=\"{}\">{}</a></li>",
+                "<li{}><a href=\"{}?path={}\" title=\"{}\">{}</a>{}</li>",
+                if note.is_some() { " class=\"gone\"" } else { "" },
                 action,
                 percent_encode(&full),
                 html_escape(&full),
                 match &label {
                     Some(l) => html_escape(l),
                     None => path_label(&full),
+                },
+                match note {
+                    Some(n) => format!("<span class=\"why\">{n}</span>"),
+                    None => String::new(),
                 }
             )
         })
@@ -507,14 +528,25 @@ fn root_list<I: Iterator<Item = (Option<String>, PathBuf)>>(
 /// knows that — the server would have to guess at a font it cannot see.
 fn path_label(full: &str) -> String {
     match full.rfind(|c| c == '/' || c == '\\') {
-        // A separator with something after it: everything up to and including it
-        // is the head. A trailing one means a filesystem or drive root, which is
-        // all leaf and has no name of its own to show.
+        // A separator with something after it. The separator goes to the *leaf*,
+        // not the end of the head: it is the one character that says the name is
+        // a name under something, and on the head it would be the first thing an
+        // ellipsis ate — leaving `/home/hanhua/w…project-alpha`, where the name
+        // reads as the rest of the clipped word. On the leaf it cannot be lost:
+        // `/home/hanhua/w…/project-alpha`. Nothing changes when the whole path
+        // fits, since the two halves still spell it exactly.
         Some(i) if i + 1 < full.len() => format!(
-            "<span class=\"head\">{}</span><span class=\"leaf\">{}</span>",
-            html_escape(&full[..=i]),
-            html_escape(&full[i + 1..])
+            "{}<span class=\"leaf\">{}</span>",
+            // Empty for an absolute path of one component — `/hanhua` is all
+            // leaf, and a head of nothing is a box with an ellipsis in it.
+            match &full[..i] {
+                "" => String::new(),
+                head => format!("<span class=\"head\">{}</span>", html_escape(head)),
+            },
+            html_escape(&full[i..])
         ),
+        // A trailing separator, or none at all: a filesystem or drive root, or a
+        // lone name. Either way there is no path above it to shorten.
         _ => format!("<span class=\"leaf\">{}</span>", html_escape(full)),
     }
 }

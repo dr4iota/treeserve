@@ -9,6 +9,7 @@ pub mod page;
 pub mod util;
 pub mod view;
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::net::SocketAddr;
@@ -26,6 +27,35 @@ use util::*;
 
 const APP_CSS: &str = include_str!("app.css");
 const MATH_CSS: &str = include_str!("math.css");
+
+/// What one of the pane's shortcuts turned out to be, once something looked.
+///
+/// `Unknown` is where every one of them starts, and it is not a failure to know:
+/// the lists are rendered before anything is checked, on purpose, because
+/// checking a path is a syscall that can block for as long as a network drive
+/// takes to give up. An entry says nothing about itself until there is something
+/// true to say.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RootStatus {
+    Unknown,
+    Ok,
+    /// It answered, and there is nothing there any more.
+    Missing,
+    /// It did not answer: a drive that is not ready, a share whose host has gone,
+    /// a folder we are not allowed to look into.
+    Unreachable,
+}
+
+impl RootStatus {
+    /// What to put next to the entry, or `None` while there is nothing to say.
+    pub fn note(self) -> Option<&'static str> {
+        match self {
+            RootStatus::Unknown | RootStatus::Ok => None,
+            RootStatus::Missing => Some("missing"),
+            RootStatus::Unreachable => Some("not available"),
+        }
+    }
+}
 
 pub struct Config {
     /// Canonicalized served root. Behind a lock so an embedder can re-root a
@@ -58,6 +88,11 @@ pub struct Config {
     /// Recently served roots, newest first. Behind a lock like `root`, since it
     /// grows while the server runs.
     recent: RwLock<Arc<Vec<PathBuf>>>,
+    /// What the Places and Recent paths turned out to be, for the ones anything
+    /// has got round to looking at. Written by the embedder as its answers come
+    /// in and read while a page renders, which is the whole point of it being
+    /// separate from the two lists: they go out immediately and this catches up.
+    status: RwLock<HashMap<PathBuf, RootStatus>>,
     /// When set, requests must carry a matching `ts_token` cookie, obtained by
     /// visiting `/.ts/auth?t=<token>&back=<path>`. Used by the desktop app,
     /// where the loopback port would otherwise be open to any local process.
@@ -83,6 +118,7 @@ impl Config {
             app_ui: false,
             places: Vec::new(),
             recent: RwLock::new(Arc::new(Vec::new())),
+            status: RwLock::new(HashMap::new()),
             token: None,
         }
     }
@@ -104,6 +140,24 @@ impl Config {
     /// it re-roots, so the next page render shows the new order.
     pub fn set_recent(&self, recent: Vec<PathBuf>) {
         *self.recent.write().expect("recent lock") = Arc::new(recent);
+    }
+
+    /// What a shortcut turned out to be. `Unknown` for anything nobody has
+    /// looked at, which a page renders as an ordinary entry.
+    pub fn root_status(&self, path: &Path) -> RootStatus {
+        self.status
+            .read()
+            .expect("status lock")
+            .get(path)
+            .copied()
+            .unwrap_or(RootStatus::Unknown)
+    }
+
+    /// Records what a shortcut turned out to be. Every page rendered after this
+    /// shows it; the one already on screen was static when it left and stays
+    /// that way, which is the trade for having no script in it.
+    pub fn set_root_status(&self, path: PathBuf, status: RootStatus) {
+        self.status.write().expect("status lock").insert(path, status);
     }
 
     pub fn title(&self) -> String {

@@ -20,3 +20,9 @@ tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
 treeserve = { path = ".." }
+
+# For `GetLogicalDrives`, which is the only way to ask which drive letters exist
+# without asking the drives themselves. Already in the tree under tauri, so this
+# is a name for something we were building anyway.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

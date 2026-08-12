@@ -109,6 +109,9 @@ header {
      every pill the same circle whatever it contains — including the shell's
      Back, which as a piece of header chrome keeps its own padding otherwise. */
   .ico { display: flex; }
+  /* The status line is down to one line's worth of room, and the served folder
+     is worth more of it than our own version number. */
+  footer .where .app { display: none; }
   .back, .controls a, .controls span.ctl, footer a.pick {
     display: inline-flex;
     align-items: center;
@@ -165,25 +168,62 @@ nav.tree a:hover { background: var(--border); text-decoration: none; }
 nav.tree a.dir { color: var(--link); }
 nav.tree .cur > a { font-weight: 700; background: var(--border); }
 nav.tree .more { color: var(--muted); font-style: italic; }
-/* A Recent shows as much of its path as the pane is wide, which is a length only
-   the browser knows: the server sends the whole thing split in two and the
-   ellipsis lands wherever it has to. The leaf is the folder's own name and never
-   shrinks, so what goes is the middle of the path above it — `/home/hanhua/mix/`
-   thinning towards `/home/…/` as the pane narrows, with `tree` still on the end.
-   Two boxes in a row, no measuring, and it re-lays itself out on a window drag
-   without the page knowing. The two boxes sit flush against each other, so the
-   slack you can see before a leaf on a clipped row is inside the head: an
-   ellipsis lands after the last character that fits, and what the next one
-   needed goes unused. At most one character, and the price of not measuring. */
-nav.tree .chooser a { display: flex; }
-nav.tree .chooser .head {
-  color: var(--muted);
+/* A path shows as much of itself as its box is wide, which is a length only the
+   browser knows: the server sends the whole thing split in two and the ellipsis
+   lands wherever it has to. The leaf is the folder's own name, with the separator
+   in front of it, and never shrinks — so what goes is the middle of the path
+   above it, `/home/hanhua/mix` thinning towards `/home/…` as the box narrows with
+   `/tree` still on the end. Two boxes in a row, no measuring, and it re-lays
+   itself out on a window drag without the page knowing.
+                                                                       [continued]
+   A leading ellipsis is the other way to keep the end of a path, and CSS can do
+   it: `direction: rtl` puts the ellipsis at the start, and the string still reads
+   left to right if it is wrapped in an isolate (U+2066 … U+2069) — without one,
+   the leading `/` reorders to the visual end and the path reads as a lie. It is
+   the tool for a path we do not get to split. Here we do, and two boxes keep the
+   root as well as the name, so `/home/hanhua/w…/project-alpha` rather than
+   `…y/deeply/nested/project-alpha`.
+
+   The two boxes sit flush against each other, so the slack you can see before a
+   leaf on a clipped row is inside the head: an ellipsis lands after the last
+   character that fits, and what the next one needed goes unused. At most one
+   character, and the price of not measuring. */
+nav.tree .chooser a, footer .where { display: flex; }
+nav.tree .chooser .head, footer .where .head {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-nav.tree .chooser .leaf { flex: 0 0 auto; }
+nav.tree .chooser .leaf, footer .where .leaf { flex: 0 0 auto; }
+nav.tree .chooser .head { color: var(--muted); }
+/* A shortcut whose check came back badly. The lists are drawn before anything is
+   checked — a check can block for as long as a dead network drive takes to admit
+   it — so this is what an answer looks like when it arrives: the entry dimmed to
+   the weight of the path above it, and a word for what went wrong.
+                                                                       [continued]
+   The word sits out at the right of the entry's own line and drops to the next
+   one only when it will not fit, which is the flex line break doing it: the entry
+   may shrink (it has an ellipsis for that) but not past the name, so when the
+   name and the word together outrun the pane there is nothing left to give and
+   they take a line each. Right-aligned either way, so a column of them reads
+   down the edge. */
+nav.tree .chooser li.gone {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+}
+/* Dimmed, and that is all: the grey and the word beside it already say it. An
+   italic went here first, until a Windows leaf showed what italic does to a
+   leading backslash — `\Documents` set as `|Documents`. */
+nav.tree .chooser li.gone > a { flex: 1 1 auto; color: var(--muted); }
+nav.tree .chooser .why {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: .4rem;
+  font-size: .7rem;
+  color: var(--muted);
+}
 
 main { flex: 1; min-width: 0; padding: 1rem 1.25rem 3rem; }
 
@@ -371,7 +411,12 @@ footer {
   align-items: center;
   gap: .75rem;
 }
-footer .where { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* `display: flex` and the head/leaf pair come from the path rules above. The
+   space before the path is the version's margin and not a `gap`, which would
+   also have opened one between the head and the leaf — and those two are halves
+   of one path that has to read as one. */
+footer .where { min-width: 0; }
+footer .where .app { flex: 0 0 auto; margin-right: .35rem; }
 /* The picker sits in the status line because that line is always on screen,
    including at the widths where the pane is not. */
 footer a.pick {

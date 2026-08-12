@@ -10,12 +10,16 @@
 //! exchanges it for a cookie and every later request is checked against it.
 
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{mpsc, Arc};
+use std::thread;
+use std::time::Duration;
 
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
-use treeserve::Config;
+use treeserve::{Config, RootStatus};
 
 const WINDOW: &str = "main";
 const WORKER_THREADS: usize = 4;
@@ -68,7 +72,23 @@ pub fn run() {
                 // Started by double-click: the working directory is wherever
                 // the shell happened to put us, which is never what the user
                 // meant, so ask which folder to browse.
-                None => ask_for_folder(handle, true),
+                //
+                // The window goes up first, hidden. Creating it is the one slow
+                // thing left in a cold start — WebView2 spawning its processes,
+                // and on a first ever run laying down its user-data folder — and
+                // it used to be spent *after* the folder was chosen, with nothing
+                // on screen to show for it. Now it happens while the picker is
+                // up, which is time the app was going to spend waiting anyway.
+                // The placeholder root is never seen: `open_root` re-roots and
+                // navigates before it shows the window. Loading a real page into
+                // it is deliberate too — the stylesheet, the fonts and the layout
+                // are all warm by the time there is something to paint.
+                None => {
+                    if let Err(e) = start(&handle, placeholder_root(&handle)) {
+                        fail(&handle, &e, true);
+                    }
+                    ask_for_folder(handle, true);
+                }
             }
             Ok(())
         })
@@ -83,11 +103,41 @@ fn first_dir_arg<I: Iterator<Item = String>>(args: I) -> Option<PathBuf> {
         .find_map(|p| p.canonicalize().ok().filter(|p| p.is_dir()))
 }
 
+/// Somewhere for the server to point while the picker is up, so the window can
+/// be built before there is a folder to show in it. Never rendered visibly.
+fn placeholder_root(app: &AppHandle) -> PathBuf {
+    app.path()
+        .home_dir()
+        .ok()
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(std::env::temp_dir)
+}
+
+/// Where to open the picker: the newest Recent, if it answers straight away.
+///
+/// A remembered folder can be on a drive that is not there, and handing the
+/// picker one of those makes the picker do the waiting we just stopped doing.
+/// Half a second on a thread we can walk away from, then the picker decides for
+/// itself. The probe thread may sit there for another twenty seconds; it holds
+/// nothing but a send end nobody is listening to.
+fn picker_start_dir(app: &AppHandle) -> Option<PathBuf> {
+    let last = recent(app).into_iter().next()?;
+    let (tx, rx) = mpsc::channel();
+    let probe = last.clone();
+    thread::spawn(move || {
+        let _ = tx.send(probe.is_dir());
+    });
+    match rx.recv_timeout(Duration::from_millis(500)) {
+        Ok(true) => Some(last),
+        _ => None,
+    }
+}
+
 /// Native folder picker. Non-blocking: the blocking variant would deadlock the
 /// event loop when called from `setup` or from a navigation handler.
 fn ask_for_folder(app: AppHandle, exit_if_cancelled: bool) {
     let mut dialog = app.dialog().file().set_title("Choose a folder to browse");
-    if let Some(last) = recent(&app).into_iter().next() {
+    if let Some(last) = picker_start_dir(&app) {
         dialog = dialog.set_directory(last);
     }
     dialog.pick_folder(move |picked| match picked {
@@ -121,17 +171,31 @@ fn open_root(app: &AppHandle, dir: PathBuf, remember: bool) {
         serving.inner.state.cfg.set_root(dir.clone());
         // Back to the listing root; the token cookie is already set, and the
         // page-load hook retitles the window.
-        if let Some(win) = app.get_webview_window(WINDOW)
-            && let Ok(url) = format!("{}/", serving.origin).parse()
-        {
-            let _ = win.navigate(url);
+        if let Some(win) = app.get_webview_window(WINDOW) {
+            if let Ok(url) = format!("{}/", serving.origin).parse() {
+                let _ = win.navigate(url);
+            }
+            // It may still be hidden: on a double-click start the window is
+            // built while the picker is up, and this is the first moment there
+            // is a folder to put in it. Idempotent for every later re-root.
+            show(&win);
         }
         return;
     }
 
-    if let Err(e) = start(app, dir) {
-        fail(app, &e, true);
+    match start(app, dir) {
+        Ok(()) => {
+            if let Some(win) = app.get_webview_window(WINDOW) {
+                show(&win);
+            }
+        }
+        Err(e) => fail(app, &e, true),
     }
+}
+
+fn show(win: &tauri::WebviewWindow) {
+    let _ = win.show();
+    let _ = win.set_focus();
 }
 
 fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
@@ -164,6 +228,10 @@ fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
     .title(window_title(&root))
     .inner_size(1200.0, 850.0)
     .min_inner_size(480.0, 360.0)
+    // Shown by whoever knows there is something worth showing — `open_root`,
+    // once it has a folder. A window built before the picker has been answered
+    // would otherwise flash a placeholder.
+    .visible(false)
     .initialization_script(SHORTCUTS)
     // The title follows the served root, which "Open Folder…" can change, so
     // it is refreshed on every page load rather than only at window creation.
@@ -225,6 +293,8 @@ fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
     .build()
     .map_err(|e| format!("Cannot create the window: {e}"))?;
 
+    check_roots(app);
+
     // Dropping a folder on the window re-roots; dropping a file opens its page.
     win.on_window_event({
         let app = app.clone();
@@ -238,6 +308,82 @@ fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
     });
 
     Ok(())
+}
+
+/// Finds out what the pane's shortcuts actually are, off the critical path.
+///
+/// The two lists go out unchecked — that is what makes them free — and this
+/// catches up with them. One thread per path, because the entire problem is that
+/// a path can take twenty seconds to answer and the other dozen should not be
+/// queued behind it. Each answer is recorded as it lands, so any page rendered
+/// after it greys that entry out and says why.
+///
+/// Recent then prunes itself: an entry that is not there is dropped from the
+/// file, so the next launch does not carry it. Once, from here, when every check
+/// is in — one writer, no lost updates — and only from the file. The list on
+/// screen keeps it, greyed. An entry vanishing from under the pointer is worse
+/// than one that says what is wrong with it.
+fn check_roots(app: &AppHandle) {
+    let Some(serving) = app.try_state::<Serving>() else {
+        return;
+    };
+    let state = Arc::clone(&serving.inner.state);
+    let file = recent_file(app);
+    thread::spawn(move || {
+        let recent = state.cfg.recent();
+        let paths: Vec<PathBuf> = state
+            .cfg
+            .places
+            .iter()
+            .map(|(_, p)| p.clone())
+            .chain(recent.iter().cloned())
+            .collect();
+
+        let checks: Vec<_> = paths
+            .into_iter()
+            .map(|path| {
+                let state = Arc::clone(&state);
+                thread::spawn(move || {
+                    let status = match fs::metadata(&path) {
+                        Ok(m) if m.is_dir() => RootStatus::Ok,
+                        // Something is there, but not a folder any more.
+                        Ok(_) => RootStatus::Missing,
+                        Err(e) if e.kind() == io::ErrorKind::NotFound => RootStatus::Missing,
+                        // Everything else is the drive or the share declining to
+                        // say: not ready, host gone, permission refused.
+                        Err(_) => RootStatus::Unreachable,
+                    };
+                    state.cfg.set_root_status(path.clone(), status);
+                    (path, status)
+                })
+            })
+            .collect();
+
+        let gone: Vec<PathBuf> = checks
+            .into_iter()
+            .filter_map(|h| h.join().ok())
+            .filter(|(path, status)| *status != RootStatus::Ok && recent.contains(path))
+            .map(|(path, _)| path)
+            .collect();
+        if let (Some(file), false) = (file, gone.is_empty()) {
+            prune_recent(&file, &gone);
+        }
+    });
+}
+
+/// Drops paths from the Recent file, leaving everything else as it is — the file
+/// may have been rewritten by `remember_root` while the checks were running.
+fn prune_recent(file: &Path, gone: &[PathBuf]) {
+    let Ok(text) = fs::read_to_string(file) else {
+        return;
+    };
+    let kept: String = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !gone.iter().any(|g| g == Path::new(l)))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    let _ = fs::write(file, kept);
 }
 
 /// `?dl=1`, the query the server's "Download" links carry.
@@ -359,11 +505,30 @@ fn places(app: &AppHandle) -> Vec<(String, PathBuf)> {
     .filter_map(|(label, dir)| dir.ok().filter(|d| d.is_dir()).map(|d| (label.to_string(), d)))
     .collect();
 
+    // Which letters exist, asked of the system rather than of the drives. The
+    // obvious loop — `is_dir()` on A:\ through Z:\ — puts a `GetFileAttributesW`
+    // on each of the 26, and a letter that exists but is not ready does not fail,
+    // it *waits*: a mapped drive whose server is gone waits out the SMB
+    // redirector timeout, and a spun-down external disk waits for the platters.
+    // Measured on a machine with one disconnected mapping, `Z:` to a NAS that was
+    // off: 21.1 seconds for the 26 probes. All of it fell between choosing a
+    // folder and this window existing, because that is where `start` runs, and
+    // only on the first open — every later one re-roots a window that is already
+    // up. `GetLogicalDrives` is a bitmask out of the object namespace and touches
+    // no device, so it cannot stall.
+    //
+    // The trade is that a letter which is present but unreachable is now listed.
+    // That is the better half of it: the old probe paid for the discovery every
+    // time and then hid the drive, where this pays nothing and answers when the
+    // drive is actually asked for — which is also what Explorer does.
     #[cfg(windows)]
-    for letter in b'A'..=b'Z' {
-        let drive = PathBuf::from(format!("{}:\\", letter as char));
-        if drive.is_dir() {
-            out.push((format!("{}:", letter as char), drive));
+    {
+        let mask = unsafe { windows_sys::Win32::Storage::FileSystem::GetLogicalDrives() };
+        for letter in b'A'..=b'Z' {
+            if mask & (1 << (letter - b'A')) != 0 {
+                let c = letter as char;
+                out.push((format!("{c}:"), PathBuf::from(format!("{c}:\\"))));
+            }
         }
     }
     #[cfg(not(windows))]
@@ -415,8 +580,13 @@ fn recent_file(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_config_dir().ok().map(|d| d.join("recent.txt"))
 }
 
-/// Roots served before, newest first. Folders that have since gone away are
-/// dropped, so a stale list cannot offer something that no longer opens.
+/// Roots served before, newest first, exactly as recorded.
+///
+/// Nothing here checks that they are still there. It used to, and that was a
+/// blocking stat per entry on the way to the picker: one remembered folder on a
+/// disconnected network drive and the dialog was twenty seconds late, every
+/// launch. `check_roots` finds out afterwards instead, the pane greys out what is
+/// gone, and the file loses it so the next launch never lists it.
 fn recent(app: &AppHandle) -> Vec<PathBuf> {
     let Some(file) = recent_file(app) else {
         return Vec::new();
@@ -428,7 +598,6 @@ fn recent(app: &AppHandle) -> Vec<PathBuf> {
         .map(str::trim)
         .filter(|l| !l.is_empty())
         .map(PathBuf::from)
-        .filter(|p| p.is_dir())
         .take(RECENT_MAX)
         .collect()
 }
@@ -444,6 +613,13 @@ fn remember_root(app: &AppHandle, root: &Path) {
 
     if let Some(serving) = app.try_state::<Serving>() {
         serving.inner.state.cfg.set_recent(list.clone());
+        // We got here through `canonicalize`, so this one is known good without
+        // anybody having to look again.
+        serving
+            .inner
+            .state
+            .cfg
+            .set_root_status(root.to_path_buf(), RootStatus::Ok);
     }
     let Some(file) = recent_file(app) else { return };
     if let Some(dir) = file.parent() {
