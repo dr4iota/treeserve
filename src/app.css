@@ -239,7 +239,26 @@ nav.tree .chooser .leaf, footer .where .leaf {
    of the name it was shortening for. The name wins; the whole path is in the
    `title` either way. */
 nav.tree .chooser .head, footer .where .head { flex-shrink: 1000; min-width: 0; }
-nav.tree .chooser .leaf, footer .where .leaf { flex: 0 1 auto; }
+/* The leaf does not shrink, and is capped instead.
+                                                                       [continued]
+   Shrinking it at all was the bug behind "it truncates on the second screen".
+   Flexbox hands out a deficit in proportion, so even at a thousand to one the leaf
+   was giving up a fraction of a pixel — 0.03px — and `text-overflow` fires on any
+   overflow whatever, then pays for the ellipsis by dropping three whole
+   characters. Which way that fraction lands depends on the scale factor the text
+   is rasterised at, so the same name came out whole at 100% and clipped at 150%,
+   with nothing else different. It cannot be papered over with padding: padding is
+   outside the content box and the text is laid out inside it.
+                                                                       [continued]
+   `flex-shrink: 0` makes the content box exactly the width of its own text, so
+   there is no fraction to lose. `max-width: 100%` then covers the case the shrink
+   was there for: a name too long for the row is capped at the row and ellipsised
+   by its own rule, rather than being cut off mid-character at the pane's edge.
+                                                                       [continued]
+   Note that the DOM cannot see this. `clientWidth` and `scrollWidth` are integers
+   and both round to the same number, so a probe reports "not clipped" while the
+   paint plainly shows an ellipsis. Only a screenshot catches it. */
+nav.tree .chooser .leaf, footer .where .leaf { flex: 0 0 auto; max-width: 100%; }
 nav.tree .chooser .head { color: var(--muted); }
 /* A shortcut whose check came back badly. The lists are drawn before anything is
    checked — a check can block for as long as a dead network drive takes to admit
