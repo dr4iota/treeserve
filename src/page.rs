@@ -78,21 +78,56 @@ pub fn read_dir_sorted(state: &State, abs: &Path) -> Vec<Entry> {
     out
 }
 
+// Icons are drawn, not typed. The obvious characters for these — folder,
+// picture, film, note — all live in the emoji planes, and a font stack without
+// them (any DejaVu-only Linux, for one) draws a missing-glyph box in their
+// place. Paths cannot miss, they take the surrounding colour, and they stay
+// legible in both themes. Each constant is the inside of an `<svg>`; `svg_icon`
+// supplies the rest.
+pub const ICON_FOLDER: &str = "<path d=\"M1.7 4.5c0-.5.4-.9.9-.9h2.9l1.3 1.7h7c.5 0 .9.4.9.9v6.4c0 \
+     .5-.4.9-.9.9H2.6a.9.9 0 01-.9-.9V4.5z\"/>";
+const ICON_IMAGE: &str = "<path d=\"M2 3.6h12v8.8H2z\"/><path d=\"M2.9 11.6l3.5-3.4 1.9 2 2.3-2.7 \
+     3 3.4\"/><path d=\"M5.6 5.6a1.1 1.1 0 100 2.2 1.1 1.1 0 000-2.2z\"/>";
+const ICON_AUDIO: &str = "<path d=\"M6.6 11.4V4l6.4-1.4v2.2L6.6 6.2\"/>\
+     <path fill=\"currentColor\" stroke=\"none\" d=\"M4.9 9.6a2 2 0 100 4 2 2 0 000-4z\"/>";
+const ICON_VIDEO: &str = "<path d=\"M1.9 3.9h12.2v8.2H1.9z\"/>\
+     <path fill=\"currentColor\" stroke=\"none\" d=\"M6.6 6.3l4 1.7-4 1.7z\"/>";
+const ICON_DOC: &str = "<path d=\"M3.6 2.4h5.6l3.2 3.2v8H3.6z\"/><path d=\"M9.2 2.4v3.2h3.2\"/>\
+     <path d=\"M5.6 8.4h5M5.6 10.6h5\"/>";
+const ICON_FILE: &str = "<path d=\"M3.6 2.4h5.6l3.2 3.2v8H3.6z\"/><path d=\"M9.2 2.4v3.2h3.2\"/>";
+/// The file exactly as it is on disk, so: leaving for it.
+pub const ICON_RAW: &str =
+    "<path d=\"M9.6 3.4h3v3\"/><path d=\"M12.6 3.4L8.2 7.8\"/><path d=\"M12 9.4v3.2H3.4V4h3.2\"/>";
+pub const ICON_DOWNLOAD: &str =
+    "<path d=\"M8 2.9v6.7\"/><path d=\"M5.2 7l2.8 2.8L10.8 7\"/><path d=\"M3.2 13.1h9.6\"/>";
+pub const ICON_SOURCE: &str = "<path d=\"M6.2 4.4L2.7 8l3.5 3.6\"/><path d=\"M9.8 4.4L13.3 8l-3.5 3.6\"/>";
+pub const ICON_RENDERED: &str =
+    "<path d=\"M3.4 3h9.2v10H3.4z\"/><path d=\"M5.4 6h5.2M5.4 8.4h5.2M5.4 10.8h3.4\"/>";
+
+/// Wraps icon paths in an `<svg>` that inherits colour and text size.
+pub fn svg_icon(paths: &str) -> String {
+    format!(
+        "<svg viewBox=\"0 0 16 16\" width=\"14\" height=\"14\" fill=\"none\" stroke=\"currentColor\" \
+         stroke-width=\"1.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" \
+         aria-hidden=\"true\">{paths}</svg>"
+    )
+}
+
 fn icon_for(name: &str, is_dir: bool) -> &'static str {
     if is_dir {
-        return "&#x1F4C1;"; // folder
+        return ICON_FOLDER;
     }
     let ext = ext_of(name);
     if IMAGE_EXTS.contains(&ext.as_str()) {
-        "&#x1F5BC;&#xFE0F;" // picture
+        ICON_IMAGE
     } else if AUDIO_EXTS.contains(&ext.as_str()) {
-        "&#x1F3B5;" // music note
+        ICON_AUDIO
     } else if VIDEO_EXTS.contains(&ext.as_str()) {
-        "&#x1F3AC;" // clapper
+        ICON_VIDEO
     } else if MARKDOWN_EXTS.contains(&ext.as_str()) {
-        "&#x1F4DD;" // memo
+        ICON_DOC
     } else {
-        "&#x1F4C4;" // page
+        ICON_FILE
     }
 }
 
@@ -103,7 +138,7 @@ fn set_href(key: &str, val: &str, back: &str) -> String {
 /// A control that spells itself out when there is room and shrinks to a symbol
 /// when there is not. `icon` is raw markup: a character reference, or the folder
 /// drawn below, since no font can be relied on for that one.
-fn flag(class: &str, href: &str, icon: &str, label: &str, title: &str) -> String {
+pub(crate) fn flag(class: &str, href: &str, icon: &str, label: &str, title: &str) -> String {
     let class = if class.is_empty() {
         String::new()
     } else {
@@ -118,15 +153,6 @@ fn flag(class: &str, href: &str, icon: &str, label: &str, title: &str) -> String
         html_escape(label)
     )
 }
-
-/// A folder, drawn rather than typed. Every folder character is in the emoji
-/// planes, and a Linux font stack that has none of them shows a missing-glyph
-/// box instead — which is the whole problem with an icon for this.
-const FOLDER_SVG: &str = concat!(
-    "<svg viewBox=\"0 0 16 16\" width=\"13\" height=\"13\" aria-hidden=\"true\">",
-    "<path fill=\"currentColor\" d=\"M1.5 2.5h3.9l1.3 1.6h7.8c.6 0 1 .4 1 1v7.4c0 .6-.4 1-1 1H1.5",
-    "c-.6 0-1-.4-1-1V3.5c0-.6.4-1 1-1z\"/></svg>"
-);
 
 /// Full page shell. `rel` is the current path segments, `url_now` the raw
 /// (still percent-encoded) path+query of this request, used for toggles.
@@ -222,7 +248,7 @@ pub fn layout(
         flag(
             "pick",
             "/.ts/open",
-            FOLDER_SVG,
+            &svg_icon(ICON_FOLDER),
             "Open Folder…",
             "Open Folder… (Ctrl+O)",
         )
@@ -247,7 +273,7 @@ pub fn layout(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#x1F4C1;</text></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%234c8dff' stroke-width='1.4' stroke-linejoin='round'><path d='M1.7 4.5c0-.5.4-.9.9-.9h2.9l1.3 1.7h7c.5 0 .9.4.9.9v6.4c0 .5-.4.9-.9.9H2.6a.9.9 0 01-.9-.9V4.5z'/></svg>">
 <link rel="stylesheet" href="/.ts/app.css">
 <link rel="stylesheet" href="/.ts/math.css">
 {syntax_css}
@@ -472,7 +498,7 @@ fn entries_table(state: &State, rel: &[String], abs: &Path) -> String {
         }
         rows.push_str(&format!(
             "<tr><td><span class=\"icon\">{}</span><a href=\"{}\"{}>{}</a></td><td class=\"size\">{}</td><td class=\"time\">{}</td></tr>",
-            icon_for(&e.name, e.is_dir),
+            svg_icon(icon_for(&e.name, e.is_dir)),
             html_escape(&href),
             if e.is_dir { " class=\"dir\"" } else { "" },
             html_escape(&e.name),
@@ -547,7 +573,7 @@ fn search_results(state: &State, rel: &[String], abs: &Path, pat: &str, recursiv
         }
         rows.push_str(&format!(
             "<tr><td><span class=\"icon\">{}</span><a href=\"{}\">{}</a></td><td class=\"size\">{}</td><td class=\"time\">{}</td></tr>",
-            icon_for(&e.name, e.is_dir),
+            svg_icon(icon_for(&e.name, e.is_dir)),
             html_escape(&href),
             html_escape(&erel.join("/")),
             if e.is_dir {

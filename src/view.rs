@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::md::render_markdown;
-use crate::page::{layout, Prefs};
+use crate::page::{flag, layout, svg_icon, Prefs, ICON_DOWNLOAD, ICON_RAW, ICON_RENDERED, ICON_SOURCE};
 use crate::util::*;
 use crate::State;
 
@@ -13,9 +13,23 @@ fn raw_href(rel: &[String]) -> String {
 }
 
 fn std_controls(rel: &[String]) -> String {
+    let base = href_path(rel);
     format!(
-        "<a href=\"{0}?raw=1\">Raw</a><a href=\"{0}?dl=1\">Download</a>",
-        html_escape(&href_path(rel))
+        "{}{}",
+        flag(
+            "",
+            &format!("{base}?raw=1"),
+            &svg_icon(ICON_RAW),
+            "Raw",
+            "The file as it is on disk"
+        ),
+        flag(
+            "",
+            &format!("{base}?dl=1"),
+            &svg_icon(ICON_DOWNLOAD),
+            "Download",
+            "Save a copy"
+        )
     )
 }
 
@@ -111,8 +125,14 @@ pub fn file_page(
     if MARKDOWN_EXTS.contains(&ext.as_str()) && !want_source {
         let body = render_markdown(&state.hl, &text);
         let controls = format!(
-            "<a href=\"{}?src=1\">Source</a>{}",
-            html_escape(&href_path(rel)),
+            "{}{}",
+            flag(
+                "",
+                &format!("{}?src=1", href_path(rel)),
+                &svg_icon(ICON_SOURCE),
+                "Source",
+                "Highlighted source instead"
+            ),
             std_controls(rel)
         );
         let content = format!("<div class=\"md\">{}</div>", body);
@@ -138,9 +158,12 @@ pub fn file_page(
 
     let mut controls = String::new();
     if MARKDOWN_EXTS.contains(&ext.as_str()) {
-        controls.push_str(&format!(
-            "<a href=\"{}\">Rendered</a>",
-            html_escape(&href_path(rel))
+        controls.push_str(&flag(
+            "",
+            &href_path(rel),
+            &svg_icon(ICON_RENDERED),
+            "Rendered",
+            "Rendered view instead",
         ));
     }
     controls.push_str(&std_controls(rel));

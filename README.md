@@ -138,6 +138,11 @@ Example: `treeserve -p 9000 ~/projects/notes`
 - **File tree sidebar.** Rendered on the server; directories on the current
   path are expanded, everything else is a link, so no JS is needed for
   expansion. Toggle with “Tree” in the header.
+- **Drawn icons, not typed ones.** Listing rows and header controls use inline
+  SVG paths that inherit the surrounding colour. The characters you would reach
+  for instead — folder, picture, film, note — are all in the emoji planes, and a
+  font stack without them (any DejaVu-only Linux, for one) draws a missing-glyph
+  box where the icon should be.
 - **Glob filter.** Each directory listing has a filter form (`*.rs`,
   `[a-c]*.md`, …) with an optional recursive mode. Patterns containing `/`
   match relative paths.
@@ -215,13 +220,11 @@ cargo run -p treesight -- [FOLDER]     # dev run
   tree) and `Ctrl+O` (folder picker). On macOS a menu is also where `Cmd+Q` and
   the clipboard shortcuts come from, so that platform needs its own menu back
   before it is worth shipping there.
-- **Nothing gets a row it does not earn.** Every control spells itself out while
-  there is room and falls back to a symbol when there is not, and the pane
-  narrows and then goes as the window does — so **Open Folder…** lives in the
-  status line rather than the pane, being the one line that is always there.
-  Its folder is drawn as SVG rather than typed: folder characters live in the
-  emoji planes, and a Linux font stack with none of them draws a
-  missing-glyph box.
+- **Nothing gets a row it does not earn.** Every control — Back, Source, Raw,
+  Download, the flags — spells itself out while there is room and falls back to
+  an icon when there is not, and the pane narrows and then goes as the window
+  does. **Open Folder…** therefore lives in the status line rather than the pane,
+  that being the one line which is always there.
 - **One screen, three regions.** The shell lays itself out as an app rather than
   as a long document: the header and the status line stay where they are, and
   the sidebar and the listing scroll independently, so following a deep tree

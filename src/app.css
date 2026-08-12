@@ -99,7 +99,9 @@ header {
    that some Linux font stacks have nothing for, and a missing-glyph box next to
    the path is worse than no icon at all. */
 .ico { display: none; }
-@media (max-width: 60rem) {
+/* Late: words are better than symbols, so they stay until the header genuinely
+   cannot hold them. */
+@media (max-width: 46rem) {
   .lbl { display: none; }
   .ico { display: inline-block; vertical-align: -2px; line-height: 1; }
   .controls a, .controls span.ctl { padding: .15rem .45rem; }
@@ -161,7 +163,11 @@ table.listing td.size, table.listing td.time, table.listing th.size, table.listi
   font-size: .85rem;
   text-align: right;
 }
-.icon { display: inline-block; width: 1.4rem; }
+/* Drawn icons, so they take the row's colour: muted for a file, link-coloured
+   for a folder, which is the same distinction the names already make. */
+.icon { display: inline-block; width: 1.4rem; color: var(--muted); }
+.icon svg { vertical-align: -3px; }
+table.listing tr:has(a.dir) .icon { color: var(--link); }
 
 form.filter { margin: 0 0 1rem; display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; max-width: 60rem; }
 form.filter input[type="text"] {
