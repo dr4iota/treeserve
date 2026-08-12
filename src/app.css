@@ -103,8 +103,30 @@ header {
    cannot hold them. */
 @media (max-width: 46rem) {
   .lbl { display: none; }
-  .ico { display: inline-block; vertical-align: -2px; line-height: 1; }
-  .controls a, .controls span.ctl { padding: .15rem .45rem; }
+  /* Once a pill holds a drawing instead of a word, centre it as a box rather
+     than sitting it on a text baseline: `vertical-align` and side padding line
+     up glyphs, and a glyph is exactly what these are not. A fixed square makes
+     every pill the same circle whatever it contains — including the shell's
+     Back, which as a piece of header chrome keeps its own padding otherwise. */
+  .ico { display: flex; }
+  .back, .controls a, .controls span.ctl, footer a.pick {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.7rem;
+    height: 1.7rem;
+    padding: 0;
+  }
+}
+/* Past the width where the pane itself is gone, its switch has nothing left to
+   switch, so it goes too: a control that visibly does nothing is worse than the
+   header space it costs. Note this is the wider of the two thresholds — the pane
+   goes at 50rem and the words only at 46rem — so the flag is already dead for
+   the 4rem where it still spells itself out, and by the time it shrinks to an
+   icon it has been dead for a while. Hence one rule at the pane's own width,
+   and no icon form of this flag that anyone ever gets to see. */
+@media (max-width: 50rem) {
+  .controls a.treeflag { display: none; }
 }
 
 .shell { display: flex; align-items: stretch; flex: 1; min-height: 0; }

@@ -105,20 +105,69 @@ pub const ICON_RENDERED: &str =
     "<path d=\"M3.4 3h9.2v10H3.4z\"/><path d=\"M5.4 6h5.2M5.4 8.4h5.2M5.4 10.8h3.4\"/>";
 /// The way out of a directory, on the `..` row.
 const ICON_UP: &str = "<path d=\"M8 12.8V3.8\"/><path d=\"M4.3 7.5L8 3.8l3.7 3.7\"/>";
-/// The theme flag says which theme is on rather than which one is next: a sun
-/// for light, a moon for dark, and half of each for following the system.
+/// The shell's Back button. Drawn like the rest rather than typed as `←`, which
+/// is a character with its own advance width and its own idea of the baseline,
+/// and so never lined up with the icons beside it.
+const ICON_BACK: &str = "<path d=\"M13 8H3\"/><path d=\"M7.2 3.8L3 8l4.2 4.2\"/>";
+/// The theme flag says which setting is chosen rather than which one is next: a
+/// sun for light, a moon for dark, and half of each for following the system.
+/// Three settings, three drawings — resolving `auto` to the sun or the moon the
+/// system happens to be on would draw it as an explicit choice, and lose the one
+/// thing about that setting worth showing.
 const ICON_SUN: &str = "<path d=\"M8 4.8a3.2 3.2 0 100 6.4 3.2 3.2 0 000-6.4z\"/>\
      <path d=\"M8 1.2v1.6M8 13.2v1.6M1.2 8h1.6M13.2 8h1.6M3.2 3.2l1.2 1.2\
      M11.6 11.6l1.2 1.2M12.8 3.2l-1.2 1.2M4.4 11.6l-1.2 1.2\"/>";
+/// Centred on (8, 8) with a radius of 6, so it sits where the sun sits.
 const ICON_MOON: &str = "<path d=\"M14 8.53A6 6 0 117.47 2 4.67 4.67 0 0014 8.53z\"/>";
+/// Half filled, on the same circle. The fill runs out to the middle of the
+/// stroke for the reason the pane's does: stopping at the inside of it leaves a
+/// hairline seam. Unlike `Ln` and `Tree`, this fill is not a state — the flag has
+/// three settings, so half-and-half means half of each, not "on".
 const ICON_THEME_AUTO: &str = "<path d=\"M8 2a6 6 0 100 12A6 6 0 008 2z\"/>\
-     <path fill=\"currentColor\" stroke=\"none\" d=\"M8 2.6a5.4 5.4 0 000 10.8z\"/>";
+     <path fill=\"currentColor\" stroke=\"none\" d=\"M8 2a6 6 0 000 12z\"/>";
+// The two switches below are binary, so each says which way it is set in its own
+// ink — more ink for on — since that is the whole of the state at the widths
+// where the words are gone. How the ink arrives differs, and it follows the
+// thing being switched rather than one house rule: the pane is there either way
+// and fills in, while the line numbers are simply drawn or not.
+//
+// Neither draws anything on top of a fill, which is deliberate: an outline
+// showing through solid ink would have to be painted in the colour behind the
+// pill to read as a hole, and the ink here is `currentColor` — `--muted`, a
+// mid-grey that goes *lighter* in the dark theme. So the knockout could not be
+// white; it would have to be `--bg-subtle` and track the theme with it. Filling
+// in place of the detail rather than over it avoids owning that problem, and at
+// 14px a 1px hole in a 3px strip only reads as mud anyway.
+
 /// The tree flag: a pane down the left of the window, which is what it hides.
-const ICON_PANE: &str =
-    "<path d=\"M2.2 3h11.6v10H2.2z\"/><path d=\"M6.4 3v10\"/><path d=\"M3.6 5.8h1.4M3.6 8h1.4\"/>";
-/// Line numbers: a gutter of them beside the lines they count.
-const ICON_LINENO: &str =
-    "<path d=\"M2.6 4.2h.8M2.6 8h.8M2.6 11.8h.8\"/><path d=\"M6 4.2h7.4M6 8h7.4M6 11.8h7.4\"/>";
+fn icon_pane(on: bool) -> String {
+    format!(
+        "<path d=\"M2.2 3h11.6v10H2.2z\"/><path d=\"M6.4 3v10\"/>{}",
+        if on {
+            // Run the fill out to the middle of the frame and of the divider
+            // rather than stopping at the inside of either stroke: butting two
+            // shapes of the same colour edge to edge leaves a hairline of
+            // half-covered pixels between them.
+            "<path fill=\"currentColor\" stroke=\"none\" d=\"M2.2 3h4.2v10H2.2z\"/>"
+        } else {
+            "<path d=\"M3.6 5.8h1.4M3.6 8h1.4\"/>"
+        }
+    )
+}
+
+/// Line numbers: the lines they count, with the numbers beside them when they are
+/// on. Presence, not fill, for this one — the marks in the gutter *are* the
+/// numbers, so drawing them is what "on" means and anything else reads backwards.
+/// The lines run the full width once the numbers are gone, which is what the
+/// gutter's space does on the page too.
+fn icon_lineno(on: bool) -> &'static str {
+    if on {
+        "<path d=\"M2.6 4.2h.8M2.6 8h.8M2.6 11.8h.8\"/>\
+         <path d=\"M6 4.2h7.4M6 8h7.4M6 11.8h7.4\"/>"
+    } else {
+        "<path d=\"M2.6 4.2h10.8M2.6 8h10.8M2.6 11.8h10.8\"/>"
+    }
+}
 
 /// Wraps icon paths in an `<svg>` that inherits colour and text size.
 pub fn svg_icon(paths: &str) -> String {
@@ -170,8 +219,9 @@ fn set_href(key: &str, val: &str, back: &str) -> String {
 }
 
 /// A control that spells itself out when there is room and shrinks to a symbol
-/// when there is not. `icon` is raw markup: a character reference, or the folder
-/// drawn below, since no font can be relied on for that one.
+/// when there is not. `icon` is raw markup, and always a drawn one: every
+/// character that would do instead brings its own metrics, and a row of pills is
+/// only tidy when the thing inside each one measures the same.
 pub(crate) fn flag(class: &str, href: &str, icon: &str, label: &str, title: &str) -> String {
     let class = if class.is_empty() {
         String::new()
@@ -237,42 +287,51 @@ pub fn layout(
         }
     }
 
+    // Each title spells out both the state and what a click does, because from
+    // the width where the words go it is the only thing left that can.
     let mut controls = String::from(extra_controls);
     if show_ln_toggle {
         let (label, val) = if prefs.ln { ("Ln: on", "0") } else { ("Ln: off", "1") };
         controls.push_str(&flag(
             "",
             &set_href("ln", val, url_now),
-            &svg_icon(ICON_LINENO),
+            &svg_icon(&icon_lineno(prefs.ln)),
             label,
-            "Line numbers",
+            if prefs.ln {
+                "Line numbers on — click to hide"
+            } else {
+                "Line numbers off — click to show"
+            },
         ));
     }
-    let (tree_label, tree_val) = if prefs.sidebar {
-        ("Tree: on", "0")
+    let (tree_label, tree_val, tree_title) = if prefs.sidebar {
+        ("Tree: on", "0", "File tree shown — click to hide")
     } else {
-        ("Tree: off", "1")
+        ("Tree: off", "1", "File tree hidden — click to show")
     };
+    // `treeflag`: the stylesheet drops this one at the width where the pane it
+    // switches is gone, rather than leaving a switch with nothing on the end.
     controls.push_str(&flag(
-        "",
+        "treeflag",
         &set_href("sidebar", tree_val, url_now),
-        &svg_icon(ICON_PANE),
+        &svg_icon(&icon_pane(prefs.sidebar)),
         tree_label,
-        // Says what the icon is for, since at narrow widths it is all there is
-        // to go on.
-        "File tree",
+        tree_title,
     ));
-    let theme_icon = match prefs.theme {
-        ThemeMode::Auto => ICON_THEME_AUTO,
-        ThemeMode::Light => ICON_SUN,
-        ThemeMode::Dark => ICON_MOON,
+    let (theme_icon, theme_title) = match prefs.theme {
+        ThemeMode::Auto => (
+            ICON_THEME_AUTO,
+            "Theme: following the system — click for light",
+        ),
+        ThemeMode::Light => (ICON_SUN, "Theme: light — click for dark"),
+        ThemeMode::Dark => (ICON_MOON, "Theme: dark — click to follow the system"),
     };
     controls.push_str(&flag(
         "",
         &set_href("theme", prefs.theme.next().as_str(), url_now),
         &svg_icon(theme_icon),
         &format!("Theme: {}", prefs.theme.as_str()),
-        "Cycle theme",
+        theme_title,
     ));
 
     // The shell's own chrome, and all of it: one button on the line the path and
@@ -282,7 +341,7 @@ pub fn layout(
     let back = if state.cfg.app_ui {
         format!(
             "\n  {}",
-            flag("back", "/.ts/back", "&#x2190;", "Back", "Back (Alt+Left)")
+            flag("back", "/.ts/back", &svg_icon(ICON_BACK), "Back", "Back (Alt+Left)")
         )
     } else {
         String::new()
