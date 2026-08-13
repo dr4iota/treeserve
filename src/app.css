@@ -1,4 +1,11 @@
+/* The properties below are values, and values are only ever as dark as whatever
+   reads them. `color-scheme` is the part that says what kind of document this
+   is, and it is the only thing the engine's own painting listens to: scrollbars,
+   the filter form's input and checkbox, the canvas behind the body, and the
+   chrome of anything embedded that keeps its own viewer. Without it a page whose
+   every colour we chose was still, underneath, a light-scheme page. */
 :root {
+  color-scheme: light;
   --bg: #ffffff;
   --fg: #1f2328;
   --muted: #59636e;
@@ -16,6 +23,7 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
+    color-scheme: dark;
     --bg: #0d1117;
     --fg: #f0f6fc;
     --muted: #9198a1;
@@ -27,6 +35,7 @@
   }
 }
 :root[data-theme="dark"] {
+  color-scheme: dark;
   --bg: #0d1117;
   --fg: #f0f6fc;
   --muted: #9198a1;
