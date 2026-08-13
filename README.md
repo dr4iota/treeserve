@@ -161,6 +161,15 @@ Example: `treeserve -p 9000 ~/projects/notes`
   The characters you would reach for instead — folder, picture, film, note — are
   all in the emoji planes, and a font stack without them (any DejaVu-only Linux,
   for one) draws a missing-glyph box where the icon should be.
+- **Refresh.** A page is a snapshot of a directory taken when it was asked for,
+  so the header carries a **Refresh** flag that asks for a new one. One control
+  for both halves of the window: the tree in the pane and the file in the middle
+  come out of the same request. Pages are sent `Cache-Control: no-store`, and raw
+  files carry an `ETag` built from their modification time and length — so a
+  reload genuinely re-reads the disk, and a picture that changed is fetched again
+  instead of being painted from the browser's copy, while one that did not costs a
+  `304`. In the desktop shell the flag is an actual reload (`F5`, `Ctrl+R`), which
+  keeps your place on the page and leaves the history alone.
 - **Glob filter.** Each directory listing has a filter form (`*.rs`,
   `[a-c]*.md`, …) with an optional recursive mode. Patterns containing `/`
   match relative paths.
@@ -234,7 +243,7 @@ cargo run -p treesight -- [FOLDER]     # dev run
 - **One line of chrome, not two.** No menu bar — those were rarely-used menus
   holding a permanent row — and no browser-style location bar either. Back
   shares the header with the path and the flags, and the shortcuts are
-  `Alt+←` / `Alt+→` (back, forward), `Ctrl+R` (reload), `Ctrl+Home` (top of
+  `Alt+←` / `Alt+→` (back, forward), `Ctrl+R` or `F5` (reload), `Ctrl+Home` (top of
   tree) and `Ctrl+O` (folder picker). On macOS a menu is also where `Cmd+Q` and
   the clipboard shortcuts come from, so that platform needs its own menu back
   before it is worth shipping there.

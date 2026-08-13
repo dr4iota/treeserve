@@ -36,6 +36,7 @@ addEventListener('keydown', function (e) {
   if (e.altKey && !e.ctrlKey && e.key === 'ArrowLeft') { history.back(); }
   else if (e.altKey && !e.ctrlKey && e.key === 'ArrowRight') { history.forward(); }
   else if (e.ctrlKey && (e.key === 'r' || e.key === 'R')) { location.reload(); }
+  else if (e.key === 'F5' && !e.ctrlKey && !e.altKey) { location.reload(); }
   else if (e.ctrlKey && e.key === 'Home') { location.assign('/'); }
   else if (e.ctrlKey && (e.key === 'o' || e.key === 'O')) { location.assign('/.ts/open'); }
   else { return; }
@@ -600,6 +601,12 @@ fn shell_action(app: &AppHandle, url: &tauri::Url) -> bool {
     match url.path() {
         "/.ts/open" => ask_for_folder(app.clone(), false),
         "/.ts/back" => eval(app, "history.back()"),
+        // The Refresh flag. A link to the page it is on would have done the same
+        // work on the server and cost the reader their place in it: a navigation
+        // starts at the top of the document and leaves the old page behind in the
+        // history. A reload keeps the scroll and keeps Back meaning the folder
+        // before this one.
+        "/.ts/reload" => eval(app, "location.reload()"),
         // Recent; a Place is the same but not worth remembering, since the pane
         // already lists it. Both carry a path we rendered ourselves, though
         // `open_root` still checks it — a remembered folder can go away.

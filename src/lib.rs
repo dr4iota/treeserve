@@ -10,13 +10,14 @@ pub mod util;
 pub mod view;
 
 use std::collections::HashMap;
-use std::fs::File;
+use std::fs::{File, Metadata};
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::net::SocketAddr;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
+use std::time::UNIX_EPOCH;
 
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 use two_face::theme::EmbeddedThemeName;
@@ -304,6 +305,13 @@ fn html_resp(status: u16, body: String) -> Response<Cursor<Vec<u8>>> {
         .with_status_code(StatusCode(status))
         .with_header(h("Content-Type", "text/html; charset=utf-8"))
         .with_header(h("X-Content-Type-Options", "nosniff"))
+        // Every page is a snapshot of a directory taken when it was asked for,
+        // and none of it is worth keeping: what a listing says is true of a
+        // moment, and which listing you get at all depends on cookies and on the
+        // root the shell currently serves. Saying nothing here left the browser
+        // to invent a lifetime of its own, and the one thing a Refresh button
+        // must not do is hand back the page it was pressed on.
+        .with_header(h("Cache-Control", "no-store"))
 }
 
 fn css_resp(body: &str) -> Response<Cursor<Vec<u8>>> {
@@ -577,19 +585,76 @@ fn parse_range(value: &str, size: u64) -> Option<(u64, u64)> {
     }
 }
 
+/// What the file is right now, as a tag a browser can quote back at us.
+///
+/// Modification time and length rather than a hash of the contents: reading the
+/// whole file to decide whether to send the whole file costs what sending it
+/// costs. The nanoseconds are in there because a second is a long time in the
+/// life of a file being edited, and two writes inside one would otherwise share
+/// a tag.
+fn etag_for(meta: &Metadata) -> Option<String> {
+    let t = meta.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+    Some(format!(
+        "\"{:x}-{:x}-{:x}\"",
+        t.as_secs(),
+        t.subsec_nanos(),
+        meta.len()
+    ))
+}
+
+/// Whether an `If-None-Match` header names the tag we would send. It may hold a
+/// list, each entry may be marked weak, and `*` means "anything you have".
+fn etag_matches(given: &str, tag: &str) -> bool {
+    let given = given.trim();
+    given == "*"
+        || given
+            .split(',')
+            .map(str::trim)
+            .any(|t| t.strip_prefix("W/").unwrap_or(t) == tag)
+}
+
 fn serve_raw(rq: Request, abs: &Path, name: &str, attachment: bool) {
     let Ok(mut file) = File::open(abs) else {
         let _ = rq.respond(Response::from_string("not found").with_status_code(StatusCode(404)));
         return;
     };
-    let size = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let meta = file.metadata().ok();
+    let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+    let etag = meta.as_ref().and_then(etag_for);
     let mime = mime_for_ext(&ext_of(name));
 
+    // Reloading a page does not reload what is inside it: the picture, the video
+    // and the PDF are separate requests, and with nothing to check them against
+    // the browser kept the copies it had — so a refreshed page went on painting
+    // the old image. `no-cache` is "ask first", not "keep nothing": the copy
+    // stays where it is and a reload spends one small conditional request per
+    // file finding out whether it is still good.
     let mut headers = vec![
         h("Content-Type", mime),
         h("Accept-Ranges", "bytes"),
         h("X-Content-Type-Options", "nosniff"),
+        h(
+            "Cache-Control",
+            if etag.is_some() { "no-cache" } else { "no-store" },
+        ),
     ];
+    if let Some(tag) = &etag {
+        headers.push(h("ETag", tag));
+    }
+
+    // It asked, and the answer is that nothing has changed. Not for a range
+    // request: that client is part-way through a file it already holds, and a
+    // 304 answers a question it did not ask.
+    if let Some(tag) = &etag
+        && header_value(&rq, "Range").is_none()
+        && header_value(&rq, "If-None-Match").is_some_and(|given| etag_matches(given, tag))
+    {
+        let resp = Response::empty(StatusCode(304))
+            .with_header(h("ETag", tag))
+            .with_header(h("Cache-Control", "no-cache"));
+        let _ = rq.respond(resp);
+        return;
+    }
     if attachment {
         let safe: String = name.chars().filter(|c| *c != '"' && *c != '\\').collect();
         headers.push(h(

@@ -103,6 +103,13 @@ pub const ICON_DOWNLOAD: &str =
 pub const ICON_SOURCE: &str = "<path d=\"M6.2 4.4L2.7 8l3.5 3.6\"/><path d=\"M9.8 4.4L13.3 8l-3.5 3.6\"/>";
 pub const ICON_RENDERED: &str =
     "<path d=\"M3.4 3h9.2v10H3.4z\"/><path d=\"M5.4 6h5.2M5.4 8.4h5.2M5.4 10.8h3.4\"/>";
+/// Refresh: the page as the disk has it now. Three quarters of a circle with the
+/// gap and the arrowhead at the top right, so the drawing is the turn itself. The
+/// head is the chevron `ICON_UP` and `ICON_BACK` use, rather than the square hook
+/// most icon sets put on this one — an arrow is already spelled a particular way
+/// here and a second spelling of it would only be a second spelling.
+const ICON_REFRESH: &str =
+    "<path d=\"M12.16 5.8A4.8 4.8 0 1 1 8 3.4\"/><path d=\"M6.5 2.1L8 3.4l-1.5 1.3\"/>";
 /// The way out of a directory, on the `..` row.
 const ICON_UP: &str = "<path d=\"M8 12.8V3.8\"/><path d=\"M4.3 7.5L8 3.8l3.7 3.7\"/>";
 /// The shell's Back button. Drawn like the rest rather than typed as `←`, which
@@ -291,9 +298,32 @@ pub fn layout(
         }
     }
 
+    // One control for both halves of the window, because there is only one
+    // window: the pane and the listing come out of the same request, and the tree
+    // re-reads its directories every time it is drawn. It goes ahead of the
+    // page's own flags so that it sits in the same place on a listing, a file and
+    // an error, instead of shifting along by however many controls that page
+    // happens to bring.
+    //
+    // In the shell it is a link the shell turns into an actual reload, which
+    // keeps the scroll position and adds nothing to the history; a link back to
+    // this same page does neither, and Back would start to mean "here again".
+    // Nothing intercepts it on the web, so there it is exactly that link.
+    let (refresh_href, refresh_title) = if state.cfg.app_ui {
+        ("/.ts/reload".to_string(), "Reload this page (F5)")
+    } else {
+        (url_now.to_string(), "Reload this page")
+    };
     // Each title spells out both the state and what a click does, because from
     // the width where the words go it is the only thing left that can.
-    let mut controls = String::from(extra_controls);
+    let mut controls = flag(
+        "",
+        &refresh_href,
+        &svg_icon(ICON_REFRESH),
+        "Refresh",
+        refresh_title,
+    );
+    controls.push_str(extra_controls);
     if show_ln_toggle {
         let (label, val) = if prefs.ln { ("Ln: on", "0") } else { ("Ln: off", "1") };
         controls.push_str(&flag(
