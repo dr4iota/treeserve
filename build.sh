@@ -25,18 +25,37 @@ target=${1:-all}
 prefix=${2:-${PREFIX:-$HOME/bin}}
 cd "$(dirname "$0")"
 
+# What this run actually produced. The summary at the end used to list dist/
+# instead, which is not the same question: a Linux build would report the .exe
+# files that a Windows build had left there days earlier, in the one place
+# anybody looks to check what they just got.
+built=""
+
+# Copies a freshly built file into dist/ and records that we made it.
+keep() {
+    name=$(basename "$1")
+    # Unlinked first rather than written through: copying over a binary that is
+    # running fails with ETXTBSY, and "you may not rebuild the app while the app
+    # is open" is not a rule this script has any business enforcing — least of
+    # all after the compile, having spent the minutes and thrown them away. The
+    # process that is running keeps the inode it started from and never notices.
+    rm -f "$2/$name"
+    cp "$1" "$2/$name"
+    built="$built $2/$name"
+}
+
 build_server() {
     echo "[build] treeserve (server + CLI)"
     cargo build --release
     mkdir -p dist
-    cp target/release/treeserve dist/
+    keep target/release/treeserve dist
 }
 
 build_app() {
     echo "[build] treesight (desktop app)"
     cargo build --release -p treesight
     mkdir -p dist
-    cp target/release/treesight dist/
+    keep target/release/treesight dist
 }
 
 # Cross-compiles both .exe files from Linux. zig is the whole Windows
@@ -98,13 +117,20 @@ eval exec zig rc /:output-format coff /:target x86_64 /:auto-includes gnu \
 EOF
     chmod +x "$shims/dlltool" "$shims/windres"
 
+    # This build prints "ignoring deprecated linker optimization setting '1'"
+    # once per binary, and it is not ours: rustc passes `-Wl,-O1` when it
+    # optimises, zig's linker answers that the setting is deprecated and ignored,
+    # and rustc's `linker_messages` lint repeats the answer. Two tools discussing
+    # a flag neither we nor they chose, reporting that the linker did *less*
+    # rather than that anything failed. Silencing it means turning off the lint
+    # that would show a real linker error, so it stays.
     echo "[build] treeserve.exe + treesight.exe ($triple)"
     RUSTFLAGS="${RUSTFLAGS:-} -C dlltool=$PWD/$shims/dlltool" \
         RC_x86_64_pc_windows_gnu="$PWD/$shims/windres" \
         cargo zigbuild --release --target "$triple" -p treeserve -p treesight
     mkdir -p dist/windows
-    cp "target/$triple/release/treeserve.exe" dist/windows/
-    cp "target/$triple/release/treesight.exe" dist/windows/
+    keep "target/$triple/release/treeserve.exe" dist/windows
+    keep "target/$triple/release/treesight.exe" dist/windows
     # treeserve.exe is one self-contained file. treesight.exe is not: this
     # target links Microsoft's WebView2 loader as a DLL rather than the static
     # library the MSVC build gets, so that one file has to travel with it.
@@ -114,7 +140,7 @@ EOF
         echo "error: WebView2Loader.dll not found under target/$triple/release/build/" >&2
         exit 1
     fi
-    cp "$loader" dist/windows/
+    keep "$loader" dist/windows
 }
 
 case $target in
@@ -138,7 +164,7 @@ static)
     echo "[build] treeserve, static ($triple)"
     cargo build --release --target "$triple" --no-default-features --features pure
     mkdir -p dist
-    cp "target/$triple/release/treeserve" dist/
+    keep "target/$triple/release/treeserve" dist
     ;;
 windows)
     build_windows
@@ -180,14 +206,17 @@ esac
 
 echo
 echo "built:"
-# An `if` rather than a `&&` list: a skipped last entry would otherwise make
-# the loop fail, and `set -e` would end the script here.
-for f in dist/* dist/windows/*; do
-    if [ -f "$f" ]; then
-        echo "    $f  ($(wc -c <"$f" | tr -d ' ') bytes)"
-    fi
+for f in $built; do
+    echo "    $f  ($(wc -c <"$f" | tr -d ' ') bytes)"
 done
 [ "$target" = bundle ] && echo "    target/release/bundle/ (installers)"
+# The .exe files are nobody's business but `$0 windows`, and they sit in dist/
+# looking exactly like the ones we just made. Anyone reading this list is
+# reading it to find out what is now current, so say which part of it is not.
+if [ "$target" != windows ] && [ -f dist/windows/treesight.exe ]; then
+    echo
+    echo "note: dist/windows/ is from an earlier '$0 windows' and was NOT rebuilt"
+fi
 echo
 if [ "$target" = windows ]; then
     echo "copy dist/windows/ to the Windows machine; treesight.exe needs"
