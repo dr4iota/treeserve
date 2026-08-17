@@ -60,7 +60,7 @@ pub fn file_page(
 
     if IMAGE_EXTS.contains(&ext.as_str()) {
         let content = format!(
-            "{}<a href=\"{1}\"><img class=\"preview-img\" src=\"{1}\" alt=\"{2}\"></a>",
+            "{}<div class=\"fit\"><a href=\"{1}\"><img class=\"preview-img\" src=\"{1}\" alt=\"{2}\"></a></div>",
             meta_line(size, mtime, "image"),
             html_escape(&raw_href(rel)),
             html_escape(name)
@@ -69,7 +69,7 @@ pub fn file_page(
     }
     if VIDEO_EXTS.contains(&ext.as_str()) {
         let content = format!(
-            "{}<video class=\"preview\" controls src=\"{}\"></video>",
+            "{}<div class=\"fit\"><video class=\"preview\" controls src=\"{}\"></video></div>",
             meta_line(size, mtime, "video"),
             html_escape(&raw_href(rel))
         );
@@ -85,7 +85,7 @@ pub fn file_page(
     }
     if ext == "pdf" {
         let content = format!(
-            "{}<embed class=\"pdf\" src=\"{}\" type=\"application/pdf\">",
+            "{}<div class=\"fit\"><embed class=\"pdf\" src=\"{}\" type=\"application/pdf\"></div>",
             meta_line(size, mtime, "pdf"),
             html_escape(&raw_href(rel))
         );

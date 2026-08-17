@@ -472,7 +472,57 @@ form.filter button:hover { border-color: var(--accent); color: var(--accent); }
     0 0 / 24px 24px;
 }
 video.preview, audio.preview { max-width: 100%; }
+/* The viewport figure is the fallback for an engine without `:has`, where a
+   guess that is too short is at least a guess that only scrolls once. */
 embed.pdf { width: 100%; height: calc(100vh - 8rem); border: 1px solid var(--border); border-radius: 8px; }
+
+/* One pane, one thing in it. A picture, a film and a PDF are each shown whole or
+   not shown properly at all, so each gets exactly the height the meta line
+   leaves — measured, not arrived at by subtracting a header, a footer and two
+   paddings we would then have to keep in step by hand. For the PDF that is the
+   difference between one scrollbar and two, since it brings its own viewer and
+   its own scrollbar inside; for the other two it is the difference between
+   seeing the thing and scrolling to see the rest of it. */
+main:has(> .fit) { display: flex; flex-direction: column; }
+/* A page in a browser is a document, and a document grows as long as it likes:
+   the viewport is its floor, not its ceiling, and a pane told to fill what is
+   left of the screen would happily be told there is more screen than there is.
+   A page whose whole point is one thing shown whole is one screen exactly —
+   which is the shape the desktop shell gives every page, and nothing is left
+   below the fold here for the page scroll to have reached anyway. */
+body:has(main > .fit) {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+body:has(main > .fit) header, body:has(main > .fit) footer { flex: 0 0 auto; }
+body:has(main > .fit) .shell { overflow: hidden; }
+body:has(main > .fit) nav.tree { overflow-y: auto; }
+body:has(main > .fit) main { overflow: auto; }
+.fit {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  /* Cross axis is the width here, and a picture stretched to the pane's width is
+     a picture out of proportion. */
+  align-items: flex-start;
+}
+/* Both dimensions capped and neither set: the engine then shrinks whichever one
+   runs out first and takes the other with it, which is the picture's own
+   proportions kept. Small ones are left alone — this is a ceiling, not a size. */
+.fit .preview-img, .fit video.preview { max-width: 100%; max-height: 100%; }
+/* The link around an image is scenery. It stretches so the image inside has a
+   definite height to be a fraction of, and hands clicks back to the image so
+   that the empty part of it below is not a target. */
+.fit > a { align-self: stretch; display: flex; align-items: flex-start; pointer-events: none; }
+.fit > a > .preview-img { pointer-events: auto; }
+/* A PDF page is mostly its own margins, so ours around it would be margins twice
+   over — including the pane's long bottom padding, which is there to keep the
+   last line of a document off the footer and here would only cost height. It
+   scrolls inside itself, which is the whole reason the box has to be exact. */
+.fit > embed.pdf { flex: 1; align-self: stretch; height: auto; min-height: 0; }
+main:has(> .fit > embed.pdf) { padding-bottom: 1rem; }
 
 .filemeta { color: var(--muted); font-size: .85rem; margin: .35rem 0 1rem; }
 .bigmsg {
