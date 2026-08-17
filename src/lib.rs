@@ -314,10 +314,41 @@ fn html_resp(status: u16, body: String) -> Response<Cursor<Vec<u8>>> {
         .with_header(h("Cache-Control", "no-store"))
 }
 
-fn css_resp(body: &str) -> Response<Cursor<Vec<u8>>> {
-    Response::from_string(body)
+/// A stylesheet, tagged with which stylesheet it is.
+///
+/// The pages are `no-store` and the rules they are laid out by used to be good
+/// for five minutes without asking. That is a window in which a rebuilt binary
+/// serves its new markup to a browser still holding the old rules, and a page
+/// that is half of each is a page nobody wrote — which is exactly how long it
+/// takes to conclude that a change did not work. `no-cache` is "ask first", not
+/// "keep nothing": the copy stays where it is, and a load spends one small
+/// conditional request finding out whether it is still the right one.
+fn css_reply(rq: Request, body: &str) {
+    let tag = text_etag(body);
+    if header_value(&rq, "If-None-Match").is_some_and(|given| etag_matches(given, &tag)) {
+        let resp = Response::empty(StatusCode(304))
+            .with_header(h("ETag", &tag))
+            .with_header(h("Cache-Control", "no-cache"));
+        let _ = rq.respond(resp);
+        return;
+    }
+    let resp = Response::from_string(body)
         .with_header(h("Content-Type", "text/css; charset=utf-8"))
-        .with_header(h("Cache-Control", "max-age=300"))
+        .with_header(h("Cache-Control", "no-cache"))
+        .with_header(h("ETag", &tag));
+    let _ = rq.respond(resp);
+}
+
+/// A tag for a stylesheet we hold in memory: what it says, not when it was
+/// written. Nothing here is a secret and nothing is defending against a forgery,
+/// so the cheapest hash in the standard library is the right one.
+fn text_etag(body: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    body.hash(&mut hasher);
+    format!("\"{:x}\"", hasher.finish())
 }
 
 fn header_value<'a>(rq: &'a Request, name: &'static str) -> Option<&'a str> {
@@ -409,19 +440,19 @@ fn respond(state: &State, rq: Request) {
     // Internal routes (assets + preference cookies).
     match path_raw.as_str() {
         "/.ts/app.css" => {
-            let _ = rq.respond(css_resp(APP_CSS));
+            css_reply(rq, APP_CSS);
             return;
         }
         "/.ts/math.css" => {
-            let _ = rq.respond(css_resp(MATH_CSS));
+            css_reply(rq, MATH_CSS);
             return;
         }
         "/.ts/syntax-light.css" => {
-            let _ = rq.respond(css_resp(&state.hl.css_light));
+            css_reply(rq, &state.hl.css_light);
             return;
         }
         "/.ts/syntax-dark.css" => {
-            let _ = rq.respond(css_resp(&state.hl.css_dark));
+            css_reply(rq, &state.hl.css_dark);
             return;
         }
         "/.ts/set" => {
