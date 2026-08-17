@@ -597,3 +597,48 @@ body.app .shell { overflow: hidden; }
 /* One scroll per pane: the whole sidebar in one, the listing in the other. */
 body.app nav.tree { overflow-y: auto; }
 body.app main { overflow-y: auto; }
+
+/* On paper. Every rule here says the same thing twice: what a screen is, paper
+   is not. Nothing in the header or the status line can be clicked on paper and
+   the pane names files nobody can open from there, so what prints is the
+   document and only the document — until now that was true only by luck, the
+   pane going because a sheet of paper happens to be narrower than the width the
+   pane goes at.
+   The one-screen shape goes too. On screen it is what holds the panes still; on
+   paper it is an instruction to stop at the bottom of the first page, and it was
+   followed exactly — a shell window printed one page and threw the rest away.
+   And the palette goes back to light, whatever the reader chose. An engine
+   printing a dark page leaves out the background it was meant to be read
+   against and keeps the pale text, which on paper comes out as very nearly
+   nothing. Both dark selectors are named because the light values have to win
+   here whether the theme was chosen or inherited from the system. */
+@media print {
+  :root, :root:not([data-theme="light"]), :root[data-theme="dark"] {
+    color-scheme: light;
+    --bg: #ffffff;
+    --fg: #1f2328;
+    --muted: #59636e;
+    --link: #0969da;
+    --border: #d1d9e0;
+    --bg-subtle: #f6f8fa;
+    --accent: #0969da;
+    --mark: #fff8c5;
+    --err: #cf222e;
+    --note: #0969da;
+    --tip: #1a7f37;
+    --important: #8250df;
+    --warning: #9a6700;
+    --caution: #cf222e;
+  }
+  header, footer, nav.tree, form.filter, .matchnote { display: none; }
+  body, body.app, body.rawview, body:has(main > .fit) {
+    display: block;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+  .shell, body.app .shell, body:has(main > .fit) .shell { display: block; overflow: visible; }
+  main, body.app main, body:has(main > .fit) main { padding: 0; overflow: visible; }
+  /* A heading is no use at the foot of a page with nothing of its own under it. */
+  .md h1, .md h2, .md h3, .md h4 { break-after: avoid; }
+}

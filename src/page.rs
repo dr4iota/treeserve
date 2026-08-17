@@ -274,14 +274,23 @@ fn head_and_header(
         ThemeMode::Auto => String::new(),
         m => format!(" data-theme=\"{}\"", m.as_str()),
     };
+    // The syntax colours live in a stylesheet of their own, which is out of reach
+    // of the print rules in ours: a dark theme would send its own pale code to
+    // paper and the page would print with a gap where the listing was. So paper
+    // is named in the light sheet's media and screens in the dark one's — the
+    // same swap the palette makes for everything else, made where it has to be.
     let syntax_css = match prefs.theme {
         ThemeMode::Auto => concat!(
-            "<link rel=\"stylesheet\" href=\"/.ts/syntax-light.css\" media=\"(prefers-color-scheme: light)\">",
-            "<link rel=\"stylesheet\" href=\"/.ts/syntax-dark.css\" media=\"(prefers-color-scheme: dark)\">"
+            "<link rel=\"stylesheet\" href=\"/.ts/syntax-light.css\" media=\"print, (prefers-color-scheme: light)\">",
+            "<link rel=\"stylesheet\" href=\"/.ts/syntax-dark.css\" media=\"screen and (prefers-color-scheme: dark)\">"
         )
         .to_string(),
         ThemeMode::Light => "<link rel=\"stylesheet\" href=\"/.ts/syntax-light.css\">".to_string(),
-        ThemeMode::Dark => "<link rel=\"stylesheet\" href=\"/.ts/syntax-dark.css\">".to_string(),
+        ThemeMode::Dark => concat!(
+            "<link rel=\"stylesheet\" href=\"/.ts/syntax-dark.css\" media=\"screen\">",
+            "<link rel=\"stylesheet\" href=\"/.ts/syntax-light.css\" media=\"print\">"
+        )
+        .to_string(),
     };
 
     // Breadcrumbs
