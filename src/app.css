@@ -524,6 +524,16 @@ body:has(main > .fit) main { overflow: auto; }
 .fit > embed.pdf { flex: 1; align-self: stretch; height: auto; min-height: 0; }
 main:has(> .fit > embed.pdf) { padding-bottom: 1rem; }
 
+/* The raw view: the header, and under it the file with the rest of the window.
+   No pane, no status line, no border, no padding — a frame with a margin around
+   it would be our margin around a document that has its own, and the engine
+   inside knows what the file wants better than we do. `color-scheme` is
+   inherited, so the frame does hear one thing from us: which way to paint the
+   parts that are its own, the text viewer's page and its scrollbars. */
+body.rawview { height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; }
+body.rawview header { flex: 0 0 auto; }
+iframe.raw { flex: 1; min-height: 0; display: block; width: 100%; border: 0; background: var(--bg); }
+
 .filemeta { color: var(--muted); font-size: .85rem; margin: .35rem 0 1rem; }
 .bigmsg {
   border: 1px dashed var(--border);

@@ -2,14 +2,20 @@ use std::fs;
 use std::path::Path;
 
 use crate::md::render_markdown;
-use crate::page::{flag, layout, svg_icon, Prefs, ICON_DOWNLOAD, ICON_RAW, ICON_RENDERED, ICON_SOURCE};
+use crate::page::{
+    bare_layout, flag, layout, svg_icon, Prefs, ICON_DOWNLOAD, ICON_RAW, ICON_RENDERED, ICON_SOURCE,
+};
 use crate::util::*;
 use crate::State;
 
 const MAX_HIGHLIGHT_BYTES: u64 = 2 * 1024 * 1024;
 
+/// The bytes, for something on a page to point at. `bare` says so in the URL
+/// rather than leaving it to be worked out from the request's headers: what a
+/// browser says it accepts for a picture or a frame is its own business, and
+/// the answer here has to be the file either way.
 fn raw_href(rel: &[String]) -> String {
-    format!("{}?raw=1", href_path(rel))
+    format!("{}?raw=1&bare=1", href_path(rel))
 }
 
 fn std_controls(rel: &[String]) -> String {
@@ -42,6 +48,42 @@ fn meta_line(size: u64, mtime: Option<std::time::SystemTime>, extra: &str) -> St
             .unwrap_or_default(),
         extra
     )
+}
+
+/// The raw view: the file itself, in a frame that has the window from the header
+/// down. The frame keeps whatever the engine does with those bytes — the text
+/// viewer's wrapping, the PDF viewer, an image at its own size — and none of the
+/// furniture the other views put around their content, since none of it is the
+/// file. What the header says and what a flag does is ours; the rest is not.
+pub fn raw_page(state: &State, prefs: Prefs, rel: &[String], url_now: &str) -> String {
+    let name = rel.last().map(String::as_str).unwrap_or("");
+    let base = href_path(rel);
+    // The way out is the way in reversed: where every other view offers Raw,
+    // this one offers the view it came from. Download stays — it is the other
+    // thing wanted of a file one is looking at as a file.
+    let controls = format!(
+        "{}{}",
+        flag(
+            "",
+            &base,
+            &svg_icon(ICON_RENDERED),
+            "Rendered",
+            "The file as this app shows it"
+        ),
+        flag(
+            "",
+            &format!("{base}?dl=1"),
+            &svg_icon(ICON_DOWNLOAD),
+            "Download",
+            "Save a copy"
+        )
+    );
+    let content = format!(
+        "<iframe class=\"raw\" src=\"{}\" title=\"{}\"></iframe>",
+        html_escape(&raw_href(rel)),
+        html_escape(name)
+    );
+    bare_layout(state, prefs, rel, url_now, &controls, &content)
 }
 
 pub fn file_page(

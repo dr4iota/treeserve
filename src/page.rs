@@ -249,16 +249,19 @@ pub(crate) fn flag(class: &str, href: &str, icon: &str, label: &str, title: &str
     )
 }
 
-/// Full page shell. `rel` is the current path segments, `url_now` the raw
-/// (still percent-encoded) path+query of this request, used for toggles.
-pub fn layout(
+/// Everything down to the end of the header: the head, and the one line that
+/// says where you are and what can be done here. Both page shapes below start
+/// with it and differ only in what they hang underneath.
+#[allow(clippy::too_many_arguments)]
+fn head_and_header(
     state: &State,
     prefs: Prefs,
     rel: &[String],
     url_now: &str,
     extra_controls: &str,
     show_ln_toggle: bool,
-    content: &str,
+    show_pane_flag: bool,
+    extra_body_class: &str,
 ) -> String {
     let site_title = state.cfg.title();
     let title = if rel.is_empty() {
@@ -349,13 +352,17 @@ pub fn layout(
     };
     // `paneflag`: the stylesheet drops this one at the width where the pane it
     // switches is gone, rather than leaving a switch with nothing on the end.
-    controls.push_str(&flag(
-        "paneflag",
-        &set_href("sidebar", pane_val, url_now),
-        &svg_icon(&icon_pane(prefs.sidebar)),
-        pane_label,
-        pane_title,
-    ));
+    // The raw view drops it for the same reason at every width: there is no pane
+    // on that page for it to be the switch of.
+    if show_pane_flag {
+        controls.push_str(&flag(
+            "paneflag",
+            &set_href("sidebar", pane_val, url_now),
+            &svg_icon(&icon_pane(prefs.sidebar)),
+            pane_label,
+            pane_title,
+        ));
+    }
     let (theme_icon, theme_title) = match prefs.theme {
         ThemeMode::Auto => (
             ICON_THEME_AUTO,
@@ -384,29 +391,11 @@ pub fn layout(
     } else {
         String::new()
     };
-    // The picker lives in the status line, which is always on screen — the pane
-    // that used to hold it is the first thing to go when the window narrows.
-    let pick = if state.cfg.app_ui {
-        flag(
-            "pick",
-            "/.ts/open",
-            &svg_icon(ICON_FOLDER),
-            "Open Folder…",
-            "Open Folder… (Ctrl+O)",
-        )
-    } else {
-        String::new()
-    };
-    let body_class = if state.cfg.app_ui { " class=\"app\"" } else { "" };
-
-    // One switch, one thing: the pane is either there with everything in it or
-    // not there at all. In the shell that takes Places and Recent with it, which
-    // is the honest trade for a full-width listing — the picker they are
-    // shortcuts to is in the status line, and that line is always on screen.
-    let sidebar = if prefs.sidebar {
-        pane_html(state, rel)
-    } else {
-        String::new()
+    let classes = match (state.cfg.app_ui, extra_body_class) {
+        (false, "") => String::new(),
+        (true, "") => " class=\"app\"".to_string(),
+        (false, c) => format!(" class=\"{c}\""),
+        (true, c) => format!(" class=\"app {c}\""),
     };
 
     format!(
@@ -421,11 +410,58 @@ pub fn layout(
 <link rel="stylesheet" href="/.ts/math.css">
 {syntax_css}
 </head>
-<body{body_class}>
+<body{classes}>
 <header>{back}
   <div class="crumbs">{crumbs}</div>
   <div class="controls">{controls}</div>
-</header>
+</header>"#,
+        data_theme = data_theme,
+        title = html_escape(&title),
+        syntax_css = syntax_css,
+        classes = classes,
+        back = back,
+        crumbs = crumbs,
+        controls = controls,
+    )
+}
+
+/// Full page shell. `rel` is the current path segments, `url_now` the raw
+/// (still percent-encoded) path+query of this request, used for toggles.
+pub fn layout(
+    state: &State,
+    prefs: Prefs,
+    rel: &[String],
+    url_now: &str,
+    extra_controls: &str,
+    show_ln_toggle: bool,
+    content: &str,
+) -> String {
+    // The picker lives in the status line, which is always on screen — the pane
+    // that used to hold it is the first thing to go when the window narrows.
+    let pick = if state.cfg.app_ui {
+        flag(
+            "pick",
+            "/.ts/open",
+            &svg_icon(ICON_FOLDER),
+            "Open Folder…",
+            "Open Folder… (Ctrl+O)",
+        )
+    } else {
+        String::new()
+    };
+
+    // One switch, one thing: the pane is either there with everything in it or
+    // not there at all. In the shell that takes Places and Recent with it, which
+    // is the honest trade for a full-width listing — the picker they are
+    // shortcuts to is in the status line, and that line is always on screen.
+    let sidebar = if prefs.sidebar {
+        pane_html(state, rel)
+    } else {
+        String::new()
+    };
+
+    format!(
+        r#"{chrome}
 <div class="shell">
 {sidebar}
 <main>
@@ -436,13 +472,16 @@ pub fn layout(
 </body>
 </html>
 "#,
-        data_theme = data_theme,
-        title = html_escape(&title),
-        syntax_css = syntax_css,
-        body_class = body_class,
-        back = back,
-        crumbs = crumbs,
-        controls = controls,
+        chrome = head_and_header(
+            state,
+            prefs,
+            rel,
+            url_now,
+            extra_controls,
+            show_ln_toggle,
+            true,
+            ""
+        ),
         sidebar = sidebar,
         content = content,
         // The served root gets the same head-and-leaf treatment as a Recent, and
@@ -458,6 +497,35 @@ pub fn layout(
             path_label(&display_path(&state.cfg.root())),
             pick
         ),
+    )
+}
+
+/// The raw view's page: the line that says which file this is, and under it the
+/// file. Nothing else — no pane, no status line, not a pixel of padding of ours
+/// — because what is under that line is not our document to lay out. Whatever
+/// margins it has are the ones it brought, and the engine showing it is the one
+/// that knows what they should be.
+pub fn bare_layout(
+    state: &State,
+    prefs: Prefs,
+    rel: &[String],
+    url_now: &str,
+    extra_controls: &str,
+    content: &str,
+) -> String {
+    format!(
+        "{chrome}\n{content}\n</body>\n</html>\n",
+        chrome = head_and_header(
+            state,
+            prefs,
+            rel,
+            url_now,
+            extra_controls,
+            false,
+            false,
+            "rawview"
+        ),
+        content = content,
     )
 }
 

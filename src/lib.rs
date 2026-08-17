@@ -494,6 +494,22 @@ fn respond(state: &State, rq: Request) {
     let name = rel.last().cloned().unwrap_or_default();
     let want_raw = query_get(&query, "raw") == Some("1");
     let want_dl = query_get(&query, "dl") == Some("1");
+    // A file served as itself arrives with nothing around it: no path, no Back,
+    // and in the shell — which has no chrome of its own — no way out at all but a
+    // keystroke there is nothing on screen to suggest. So the raw view is the
+    // file in a frame with the page's own chrome around it, in the shell and in a
+    // browser alike, because the file is the same file in both. The frame asks
+    // for it with `bare` and gets it, as does every request that did not ask for
+    // HTML in the first place: every tool, and every `<img>`, `<video>` and
+    // `<embed>` we write. Nothing that fetches a file rather than looks at one
+    // sees this page.
+    let bare = query_get(&query, "bare") == Some("1");
+    let framed = want_raw && !want_dl && !bare;
+    if framed && wants_html(&rq) && !is_subresource(&rq) {
+        let body = view::raw_page(state, prefs, &rel, &url_now);
+        let _ = rq.respond(html_resp(200, body));
+        return;
+    }
     if want_raw || want_dl || !wants_html(&rq) || is_subresource(&rq) {
         serve_raw(rq, &canon, &name, want_dl);
         return;
