@@ -308,24 +308,24 @@ fn head_and_header(
     // an error, instead of shifting along by however many controls that page
     // happens to bring.
     //
-    // In the shell it is a link the shell turns into an actual reload, which
-    // keeps the scroll position and adds nothing to the history; a link back to
-    // this same page does neither, and Back would start to mean "here again".
-    // Nothing intercepts it on the web, so there it is exactly that link.
-    let (refresh_href, refresh_title) = if state.cfg.app_ui {
-        ("/.ts/reload".to_string(), "Reload this page (F5)")
-    } else {
-        (url_now.to_string(), "Reload this page")
-    };
+    // Shell only. There it is a link the shell turns into an actual reload, and
+    // the window it is in has no other way to ask for one — the app has no
+    // address bar and no reload button of its own. A browser has both, sitting
+    // directly above ours and doing the same thing better, so on the web this is
+    // a second button for something the reader already has.
+    //
     // Each title spells out both the state and what a click does, because from
     // the width where the words go it is the only thing left that can.
-    let mut controls = flag(
-        "",
-        &refresh_href,
-        &svg_icon(ICON_REFRESH),
-        "Refresh",
-        refresh_title,
-    );
+    let mut controls = String::new();
+    if state.cfg.app_ui {
+        controls.push_str(&flag(
+            "",
+            "/.ts/reload",
+            &svg_icon(ICON_REFRESH),
+            "Refresh",
+            "Reload this page (F5)",
+        ));
+    }
     controls.push_str(extra_controls);
     if show_ln_toggle {
         let (label, val) = if prefs.ln { ("Ln: on", "0") } else { ("Ln: off", "1") };
