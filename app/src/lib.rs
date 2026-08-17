@@ -39,6 +39,7 @@ addEventListener('keydown', function (e) {
   else if (e.key === 'F5' && !e.ctrlKey && !e.altKey) { location.reload(); }
   else if (e.ctrlKey && e.key === 'Home') { location.assign('/'); }
   else if (e.ctrlKey && (e.key === 'o' || e.key === 'O')) { location.assign('/.ts/open'); }
+  else if (e.ctrlKey && (e.key === 'p' || e.key === 'P')) { location.assign('/.ts/print'); }
   else { return; }
   e.preventDefault();
 });
@@ -607,6 +608,11 @@ fn shell_action(app: &AppHandle, url: &tauri::Url) -> bool {
         // history. A reload keeps the scroll and keeps Back meaning the folder
         // before this one.
         "/.ts/reload" => eval(app, "location.reload()"),
+        // The Print flag, and Ctrl+P, which in this window is not the engine's to
+        // answer: there is no menu here that would have carried it. The page's
+        // print rules are what makes the result worth looking at — no header, no
+        // status line, no pane, and the light palette whatever is on screen.
+        "/.ts/print" => eval(app, "window.print()"),
         // Recent; a Place is the same but not worth remembering, since the pane
         // already lists it. Both carry a path we rendered ourselves, though
         // `open_root` still checks it — a remembered folder can go away.

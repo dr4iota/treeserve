@@ -3,7 +3,8 @@ use std::path::Path;
 
 use crate::md::render_markdown;
 use crate::page::{
-    bare_layout, flag, layout, svg_icon, Prefs, ICON_DOWNLOAD, ICON_RAW, ICON_RENDERED, ICON_SOURCE,
+    bare_layout, flag, layout, svg_icon, Prefs, ICON_DOWNLOAD, ICON_PRINT, ICON_RAW, ICON_RENDERED,
+    ICON_SOURCE,
 };
 use crate::util::*;
 use crate::State;
@@ -16,6 +17,29 @@ const MAX_HIGHLIGHT_BYTES: u64 = 2 * 1024 * 1024;
 /// the answer here has to be the file either way.
 fn raw_href(rel: &[String]) -> String {
     format!("{}?raw=1&bare=1", href_path(rel))
+}
+
+/// Print, on the views that are documents: a rendered page and a listing of
+/// lines both go to paper as what they are, where a picture, a film and a file
+/// in a frame are either the engine's business or nothing anyone prints.
+///
+/// Shell only, for two reasons that agree. A browser prints on Ctrl+P and from
+/// its own menu, and the shell's window has neither. And a link cannot print
+/// anything by itself: the shell reads this one and prints, the same way it
+/// reads Back and Refresh, where on the web it would take the first line of
+/// JavaScript this app has ever needed.
+fn print_flag(state: &State) -> String {
+    if state.cfg.app_ui {
+        flag(
+            "",
+            "/.ts/print",
+            &svg_icon(ICON_PRINT),
+            "Print",
+            "Print this page (Ctrl+P)",
+        )
+    } else {
+        String::new()
+    }
 }
 
 fn std_controls(rel: &[String]) -> String {
@@ -167,7 +191,8 @@ pub fn file_page(
     if MARKDOWN_EXTS.contains(&ext.as_str()) && !want_source {
         let body = render_markdown(&state.hl, &text);
         let controls = format!(
-            "{}{}",
+            "{}{}{}",
+            print_flag(state),
             flag(
                 "",
                 &format!("{}?src=1", href_path(rel)),
@@ -198,7 +223,7 @@ pub fn file_page(
         String::new()
     };
 
-    let mut controls = String::new();
+    let mut controls = print_flag(state);
     if MARKDOWN_EXTS.contains(&ext.as_str()) {
         controls.push_str(&flag(
             "",

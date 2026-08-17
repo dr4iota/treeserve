@@ -110,6 +110,11 @@ pub const ICON_RENDERED: &str =
 /// here and a second spelling of it would only be a second spelling.
 const ICON_REFRESH: &str =
     "<path d=\"M12.16 5.8A4.8 4.8 0 1 1 8 3.4\"/><path d=\"M6.5 2.1L8 3.4l-1.5 1.3\"/>";
+/// Print: the sheet going in above, the machine, and the sheet coming out across
+/// its front. Three rectangles and no ink drop or wireless wave — the drawing has
+/// to survive being 14 pixels wide.
+pub const ICON_PRINT: &str = "<path d=\"M4.8 6.2V2.8h6.4v3.4\"/>\
+     <path d=\"M4.8 11.4H2.9V6.2h10.2v5.2h-1.9\"/><path d=\"M4.8 9.4h6.4v3.8H4.8z\"/>";
 /// The way out of a directory, on the `..` row.
 const ICON_UP: &str = "<path d=\"M8 12.8V3.8\"/><path d=\"M4.3 7.5L8 3.8l3.7 3.7\"/>";
 /// The shell's Back button. Drawn like the rest rather than typed as `←`, which
