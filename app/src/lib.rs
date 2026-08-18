@@ -12,7 +12,7 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 // Both serve `picker_start_dir`, which is the desktop picker's alone.
 #[cfg(desktop)]
 use std::sync::mpsc;
@@ -28,7 +28,6 @@ use treeserve::{Config, RootStatus};
 /// The one window's label — public so a downstream action ([`ShellExt`])
 /// can find the same window the shell drives.
 pub const WINDOW: &str = "main";
-const WORKER_THREADS: usize = 4;
 /// How many roots the Recent list keeps.
 const RECENT_MAX: usize = 8;
 
@@ -53,27 +52,50 @@ addEventListener('keydown', function (e) {
 
 /// The running server, kept in Tauri's managed state. Public so a downstream
 /// action can reach the same server the shell drives —
+/// Where the shell's own pages come from.
+///
+/// A custom scheme, not a port. Windows and Android hand a registered scheme to
+/// the webview as `http://<scheme>.localhost`; everywhere else it keeps the
+/// scheme it was registered under. Nothing is listening on a socket, so there
+/// is no address for another process on the machine to find, and nothing to
+/// authenticate to — which is the whole of why the token handshake is gone.
+pub const SCHEME: &str = "treesight";
+
+pub fn scheme_base() -> &'static str {
+    if cfg!(any(windows, target_os = "android")) {
+        "http://treesight.localhost"
+    } else {
+        "treesight://localhost"
+    }
+}
+
+/// The forms a page of ours can arrive under, for [`origin_allowed`]. A URL on
+/// a non-special scheme has an opaque origin — `treesight://localhost` and
+/// `treesight://anything-else` both serialize to "null" — so that half is
+/// matched by scheme, which is what the trailing colon means here.
+fn shell_origins() -> Vec<String> {
+    vec!["treesight:".to_string(), scheme_base().to_string()]
+}
+
 /// `app.try_state::<Serving>()` — to re-root it (`Config::set_root_vfs`) and
 /// to build URLs on its origin.
 pub struct Serving {
-    inner: treeserve::Serving,
-    /// `http://127.0.0.1:<port>`, the only origin the window may navigate to.
+    state: Arc<treeserve::State>,
+    /// The scheme base every page of ours hangs off.
     origin: String,
-    /// The handshake URL the window opens with, kept so that every later
-    /// navigation can start from it too. It sets the cookie and bounces to `/`,
-    /// and doing it again costs one redirect — cheaper than any way of finding
-    /// out whether the first one has landed yet.
+    /// The URL the window opens with. Once a plain root: there is no cookie to
+    /// collect on the way in any more.
     entry: String,
 }
 
 impl Serving {
-    /// The server's shared state: the `Config` a root opener re-roots and
+    /// The router's shared state: the `Config` a root opener re-roots and
     /// feeds Places/Recent/status through.
     pub fn state(&self) -> &Arc<treeserve::State> {
-        &self.inner.state
+        &self.state
     }
 
-    /// `http://127.0.0.1:<port>` — for building `/.ts/…` URLs to navigate to.
+    /// The scheme base — for building `/.ts/…` URLs to navigate to.
     pub fn origin(&self) -> &str {
         &self.origin
     }
@@ -175,9 +197,22 @@ pub fn run_with(context: tauri::Context<tauri::Wry>, mut ext: ShellExt) {
             }
         }));
     }
+    // The slot the protocol handler serves out of. It has to exist before the
+    // builder, which is before there is an AppHandle to build a root from, so
+    // `start` fills it in during setup and the handler answers 503 until then.
+    let router = Router(Arc::new(OnceLock::new()));
     let mut builder = builder
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init());
+        .plugin(tauri_plugin_opener::init())
+        .manage(Router(Arc::clone(&router.0)))
+        .register_asynchronous_uri_scheme_protocol(SCHEME, move |_ctx, request, responder| {
+            let slot = Arc::clone(&router.0);
+            // Off the webview's thread: highlighting a large file is the slow
+            // part of answering, and the tiny_http build had a pool of workers
+            // for exactly that reason. Doing it here would stop the window
+            // painting while it ran.
+            thread::spawn(move || responder.respond(serve(&slot, request)));
+        });
     if let Some(f) = configure {
         builder = f(builder);
     }
@@ -350,8 +385,7 @@ fn open_root(app: &AppHandle, dir: PathBuf, remember: bool) {
                 // so record it before going back to a page that will show it.
                 if let Some(serving) = back.try_state::<Serving>() {
                     serving
-                        .inner
-                        .state
+                        .state()
                         .cfg
                         .set_root_status(treeserve::util::display_path(&dir), status);
                 }
@@ -381,7 +415,7 @@ fn serve_root(app: &AppHandle, dir: PathBuf, remember: bool) {
     }
 
     if let Some(serving) = app.try_state::<Serving>() {
-        serving.inner.state.cfg.set_root(dir.clone());
+        serving.state().cfg.set_root(dir.clone());
         // Back to the listing root through the handshake, not straight to `/`.
         // The window is built pointing at the handshake and this runs as soon as
         // a path argument has been canonicalized, which is sooner than a webview
@@ -449,6 +483,77 @@ fn open_failed(app: &AppHandle, previous: Option<tauri::Url>) {
     }
 }
 
+/// The router's state, once there is one. Shared between the protocol handler
+/// registered on the builder and the `start` that eventually fills it.
+struct Router(Arc<OnceLock<Arc<treeserve::State>>>);
+
+/// Answers one webview request out of the router, or says there is nothing to
+/// answer with yet.
+fn serve(
+    slot: &OnceLock<Arc<treeserve::State>>,
+    request: tauri::http::Request<Vec<u8>>,
+) -> tauri::http::Response<Vec<u8>> {
+    let Some(state) = slot.get() else {
+        return reply_to_response(treeserve::Reply {
+            status: 503,
+            headers: vec![("Content-Type".into(), "text/plain; charset=utf-8".into())],
+            body: treeserve::Body::Text("not started".into()),
+        });
+    };
+    reply_to_response(treeserve::handle(state, &to_req(&request)))
+}
+
+/// A webview request, in the terms the router speaks. `Req::url` is path and
+/// query only, which is what tiny_http's `url()` gave it and what every route
+/// here matches on — the scheme and host are this shell's own and say nothing.
+fn to_req(request: &tauri::http::Request<Vec<u8>>) -> treeserve::Req {
+    let uri = request.uri();
+    treeserve::Req {
+        url: match uri.query() {
+            Some(q) => format!("{}?{}", uri.path(), q),
+            None => uri.path().to_string(),
+        },
+        headers: request
+            .headers()
+            .iter()
+            .filter_map(|(k, v)| v.to_str().ok().map(|v| (k.as_str().to_string(), v.to_string())))
+            .collect(),
+        is_get: request.method() == tauri::http::Method::GET,
+    }
+}
+
+/// A decided reply, as bytes the webview will take.
+///
+/// The stream is read out here rather than handed over: a custom protocol
+/// answers with a body, not with a handle to pull on. It costs nothing on a
+/// page and little on a picture, and the case that would hurt — a film — never
+/// arrives whole, because the webview asks for it a range at a time and each
+/// range is its own small answer.
+fn reply_to_response(reply: treeserve::Reply) -> tauri::http::Response<Vec<u8>> {
+    let mut builder = tauri::http::Response::builder().status(reply.status);
+    for (k, v) in &reply.headers {
+        builder = builder.header(k, v);
+    }
+    let body = match reply.body {
+        treeserve::Body::Empty => Vec::new(),
+        treeserve::Body::Text(text) => text.into_bytes(),
+        treeserve::Body::Stream { mut reader, len } => {
+            let mut buf = Vec::with_capacity(len as usize);
+            match reader.read_to_end(&mut buf) {
+                Ok(_) => buf,
+                Err(e) => {
+                    return tauri::http::Response::builder()
+                        .status(500)
+                        .header("Content-Type", "text/plain; charset=utf-8")
+                        .body(format!("read failed: {e}").into_bytes())
+                        .expect("500 is a response");
+                }
+            }
+        }
+    };
+    builder.body(body).expect("reply is a response")
+}
+
 fn show(win: &tauri::WebviewWindow) {
     let _ = win.show();
     let _ = win.set_focus();
@@ -456,11 +561,7 @@ fn show(win: &tauri::WebviewWindow) {
 
 fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
     let ext = Arc::clone(&app.state::<SharedExt>().0);
-    let token = new_token();
     let mut cfg = Config::new(root.clone());
-    cfg.port = 0; // let the OS pick a free port
-    cfg.threads = WORKER_THREADS;
-    cfg.set_token(Some(token.clone()));
     // Turns on the page's own chooser: path bar, history buttons, Places,
     // Recent and the picker button. Only ever set here — a server reachable by
     // anything but this window has no business offering them.
@@ -473,12 +574,16 @@ fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
     cfg.set_recent(recent(app));
     cfg.set_sections(ext.extra_sections.iter().flat_map(|f| f(app)).collect());
 
-    let inner = treeserve::spawn(cfg).map_err(|e| format!("Cannot start the local server: {e}"))?;
-    let origin = format!("http://127.0.0.1:{}", inner.addr.port());
-    // First stop is the token handshake, which sets the cookie and redirects.
-    let entry = format!("{origin}/.ts/auth?t={token}&back=/");
+    let state = treeserve::state_for(cfg);
+    // The protocol handler was registered before this ran and has been waiting
+    // for something to serve; handing it the state is what opens the shop.
+    if app.state::<Router>().0.set(Arc::clone(&state)).is_err() {
+        return Err("the router was already started".to_string());
+    }
+    let origin = scheme_base().to_string();
+    let entry = format!("{origin}/");
     app.manage(Serving {
-        inner,
+        state,
         origin: origin.clone(),
         entry: entry.clone(),
     });
@@ -486,7 +591,7 @@ fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
     let win = WebviewWindowBuilder::new(
         app,
         WINDOW,
-        WebviewUrl::External(entry.parse().map_err(|e| format!("bad url: {e}"))?),
+        WebviewUrl::CustomProtocol(entry.parse().map_err(|e| format!("bad url: {e}"))?),
     )
     .title(window_title(&treeserve::util::display_path(&root)))
     .inner_size(1200.0, 850.0)
@@ -504,23 +609,24 @@ fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
             if payload.event() == tauri::webview::PageLoadEvent::Finished
                 && let Some(serving) = app.try_state::<Serving>()
             {
-                let _ = win.set_title(&window_title(&serving.inner.state.cfg.root().id));
+                let _ = win.set_title(&window_title(&serving.state().cfg.root().id));
             }
         }
     })
     .on_navigation({
         let app = app.clone();
         let ext = Arc::clone(&ext);
+        let shell = shell_origins();
         move |url| {
             // Downstream actions first: a URL an extension claims is handled
             // entirely by it, the way `/.ts/open` is handled below.
             if ext.actions.iter().any(|a| a(&app, url)) {
                 return false;
             }
-            // Origin equality, not a prefix: `http://127.0.0.1:45678` and
-            // `http://127.0.0.1:4567@evil.com` both start with this origin's
-            // text and are both someone else's server.
-            if url.origin().ascii_serialization() == origin {
+            // By scheme where the origin is opaque, by whole origin where it is
+            // not — never by prefix. `http://treesight.localhost.evil.com`
+            // starts with this origin's text and is someone else's site.
+            if origin_allowed(&shell, url) {
                 // The page's own chrome. These paths are not routes: the server
                 // never re-roots itself and would answer 404, so the whole
                 // capability lives here, in the one client that may have it.
@@ -603,7 +709,7 @@ fn check_roots(app: &AppHandle) {
     let Some(serving) = app.try_state::<Serving>() else {
         return;
     };
-    let state = Arc::clone(&serving.inner.state);
+    let state = Arc::clone(serving.state());
     let file = recent_file(app);
     let app = app.clone();
     thread::spawn(move || {
@@ -756,7 +862,7 @@ fn save_as(app: &AppHandle, url: &tauri::Url) -> bool {
     let Some(serving) = app.try_state::<Serving>() else {
         return false;
     };
-    let root = serving.inner.state.cfg.root();
+    let root = serving.state().cfg.root();
     let Ok(target) = treeserve::resolve_in_root(root.vfs.as_ref(), url.path()) else {
         return false;
     };
@@ -997,13 +1103,6 @@ fn fail(app: &AppHandle, msg: &str, fatal: bool) {
         });
 }
 
-/// Per-run secret gating the loopback server.
-fn new_token() -> String {
-    let mut bytes = [0u8; 24];
-    getrandom::fill(&mut bytes).expect("system randomness");
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
 fn recent_file(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_config_dir().ok().map(|d| d.join("recent.txt"))
 }
@@ -1061,10 +1160,10 @@ pub fn remember_root_id(app: &AppHandle, id: &str) {
     let list = with_front(recent(app), id);
 
     if let Some(serving) = app.try_state::<Serving>() {
-        serving.inner.state.cfg.set_recent(list.clone());
+        serving.state().cfg.set_recent(list.clone());
         // Whoever got this far has already resolved the root, so this one is
         // known good without anybody having to look again.
-        serving.inner.state.cfg.set_root_status(id.to_string(), RootStatus::Ok);
+        serving.state().cfg.set_root_status(id.to_string(), RootStatus::Ok);
     }
     let Some(file) = recent_file(app) else { return };
     if let Some(dir) = file.parent() {

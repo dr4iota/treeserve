@@ -17,7 +17,6 @@ use std::thread::{self, JoinHandle};
 
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
-use crate::hl::Hl;
 use crate::{handle, Body, Config, Reply, Req, State};
 
 /// A running server: worker threads plus the address they are serving.
@@ -48,8 +47,7 @@ pub fn spawn(cfg: Config) -> Result<Serving, Box<dyn std::error::Error + Send + 
         .ok_or("server is not listening on an IP address")?;
 
     let threads = cfg.threads;
-    let hl = Hl::new(cfg.syn_light, cfg.syn_dark);
-    let state = Arc::new(State { cfg, hl });
+    let state = crate::state_for(cfg);
     let server = Arc::new(server);
 
     let mut handles = Vec::new();

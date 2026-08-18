@@ -381,6 +381,16 @@ pub fn resolve_in_root(vfs: &dyn Vfs, url_path: &str) -> Result<Resolved, PathEr
     }
 }
 
+/// The shared state a router needs, built from a configuration.
+///
+/// Building the highlighter is the expensive part of starting, and both faces
+/// of this crate need it: the web server on its way up, and an app that means
+/// to call [`handle`] itself over no socket at all.
+pub fn state_for(cfg: Config) -> Arc<State> {
+    let hl = Hl::new(cfg.syn_light, cfg.syn_dark);
+    Arc::new(State { cfg, hl })
+}
+
 /// A request, as the part of this that decides what to answer sees it.
 ///
 /// Owns its strings rather than borrowing them. tiny_http lends them from a
