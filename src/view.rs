@@ -9,8 +9,6 @@ use crate::page::{
 use crate::util::*;
 use crate::State;
 
-const MAX_HIGHLIGHT_BYTES: u64 = 2 * 1024 * 1024;
-
 /// The bytes, for something on a page to point at. `bare` says so in the URL
 /// rather than leaving it to be worked out from the request's headers: what a
 /// browser says it accepts for a picture or a frame is its own business, and

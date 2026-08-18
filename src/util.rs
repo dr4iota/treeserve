@@ -260,6 +260,9 @@ pub const AUDIO_EXTS: &[&str] = &["mp3", "ogg", "oga", "opus", "wav", "flac", "m
 pub const VIDEO_EXTS: &[&str] = &["mp4", "m4v", "webm", "mkv", "mov", "ogv"];
 pub const MARKDOWN_EXTS: &[&str] = &["md", "markdown", "mdown", "mkd"];
 pub const MERMAID_EXTS: &[&str] = &["mmd", "mermaid"];
+/// Files larger than this are not syntax-highlighted, Markdown-rendered, or
+/// shown as a directory README — the page offers Raw / Download instead.
+pub const MAX_HIGHLIGHT_BYTES: u64 = 2 * 1024 * 1024;
 
 pub fn human_size(n: u64) -> String {
     const UNITS: &[&str] = &["B", "K", "M", "G", "T"];

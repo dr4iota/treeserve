@@ -488,6 +488,13 @@ form.filter button:hover { border-color: var(--accent); color: var(--accent); }
   cursor: help;
 }
 
+/* Directory listing: README.md rendered under the file table. */
+.listing-readme {
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+}
+
 /* Media views */
 .preview-img {
   max-width: 100%;

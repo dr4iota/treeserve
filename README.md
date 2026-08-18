@@ -173,7 +173,9 @@ Example: `treeserve -p 9000 ~/projects/notes`
   keeps your place on the page and leaves the history alone.
 - **Glob filter.** Each directory listing has a filter form (`*.rs`,
   `[a-c]*.md`, …) with an optional recursive mode. Patterns containing `/`
-  match relative paths.
+  match relative paths. An unfiltered listing that contains `README.md` (or
+  `README.markdown` / `README.mdown` / `README.mkd`) renders that file under
+  the table, GitHub-style; glob results and `curl` listings stay names only.
 - **Syntax highlighting** via syntect (Sublime Text grammars, ~190 languages
   through two-face), with a line-number gutter that can be toggled per user
   or disabled by default with `--no-line-numbers`.

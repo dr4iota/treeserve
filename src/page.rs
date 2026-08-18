@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use crate::md::render_markdown;
 use crate::util::*;
 use crate::State;
 
@@ -773,11 +774,40 @@ pub fn listing_page(
 
     if q.is_empty() {
         content.push_str(&entries_table(state, rel, abs));
+        content.push_str(&listing_readme(state, abs));
     } else {
         content.push_str(&search_results(state, rel, abs, q, recursive));
     }
 
     layout(state, prefs, rel, url_now, "", false, &content)
+}
+
+const README_NAMES: &[&str] = &["README.md", "README.markdown", "README.mdown", "README.mkd"];
+
+/// GitHub-style README under an unfiltered listing. Missing, huge, or binary
+/// files are skipped so the table still stands on its own.
+fn listing_readme(state: &State, abs: &Path) -> String {
+    for name in README_NAMES {
+        let path = abs.join(name);
+        let Ok(meta) = fs::metadata(&path) else {
+            continue;
+        };
+        if !meta.is_file() || meta.len() > MAX_HIGHLIGHT_BYTES {
+            continue;
+        }
+        let Ok(bytes) = fs::read(&path) else {
+            continue;
+        };
+        if looks_binary(&bytes[..bytes.len().min(8192)]) {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&bytes);
+        return format!(
+            "<section class=\"listing-readme\"><div class=\"md\">{}</div></section>",
+            render_markdown(&state.hl, &text)
+        );
+    }
+    String::new()
 }
 
 fn entries_table(state: &State, rel: &[String], abs: &Path) -> String {
@@ -934,4 +964,72 @@ pub fn error_page(state: &State, prefs: Prefs, rel: &[String], url_now: &str, co
         html_escape(msg)
     );
     layout(state, prefs, rel, url_now, "", false, &content)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hl::Hl;
+    use crate::Config;
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn prefs() -> Prefs {
+        Prefs {
+            theme: ThemeMode::Light,
+            ln: false,
+            sidebar: false,
+        }
+    }
+
+    fn state_at(root: PathBuf) -> State {
+        State {
+            cfg: Config::new(root),
+            hl: Hl::for_tests(),
+        }
+    }
+
+    fn tmp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "treeserve-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn listing_includes_readme() {
+        let dir = tmp_dir("readme");
+        fs::write(dir.join("README.md"), "# Hello listing\n\nA note.\n").unwrap();
+        fs::write(dir.join("a.rs"), "fn main() {}\n").unwrap();
+        let state = state_at(dir.clone());
+        let html = listing_page(&state, prefs(), &[], &dir, &[], "/");
+        let _ = fs::remove_dir_all(&dir);
+        assert!(html.contains("listing-readme"), "{html}");
+        assert!(html.contains("Hello listing"), "{html}");
+        assert!(html.contains("a.rs"), "{html}");
+    }
+
+    #[test]
+    fn filtered_listing_skips_readme() {
+        let dir = tmp_dir("readme-q");
+        fs::write(dir.join("README.md"), "# Should not appear\n").unwrap();
+        let state = state_at(dir.clone());
+        let html = listing_page(
+            &state,
+            prefs(),
+            &[],
+            &dir,
+            &[("q".into(), "*.rs".into())],
+            "/?q=*.rs",
+        );
+        let _ = fs::remove_dir_all(&dir);
+        assert!(!html.contains("listing-readme"), "{html}");
+        assert!(!html.contains("Should not appear"), "{html}");
+    }
 }
