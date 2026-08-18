@@ -58,12 +58,9 @@ g  $P1 '/.hidden'           > "$OUT/hidden.html"
 gi $P1 '/.ts/app.css'       > "$OUT/app-css"
 curl -si -H 'Range: bytes=2-5' "http://127.0.0.1:$P1/a.rs?raw=1&bare=1" | norm > "$OUT/range"
 curl -si -H 'Range: bytes=999999-' "http://127.0.0.1:$P1/a.rs?raw=1&bare=1" | norm > "$OUT/range-416"
-# app-shaped server (token + app_ui + Places/Recent)
-gi $P2 '/'                        > "$OUT/app-unauth"
-gi $P2 '/.ts/auth?t=t0ken&back=/' > "$OUT/app-auth"
-C='-H Cookie:ts_token=t0ken'
-curl -s $C -H 'Accept: text/html' "http://127.0.0.1:$P2/"     | norm > "$OUT/app-root.html"
-curl -s $C -H 'Accept: text/html' "http://127.0.0.1:$P2/sub/" | norm > "$OUT/app-sub.html"
-curl -s $C -H 'Accept: text/html' "http://127.0.0.1:$P2/a.rs" | norm > "$OUT/app-a-rs.html"
-curl -s $C -H 'Accept: text/html' "http://127.0.0.1:$P2/.ts/wait?path=/tmp/x" | norm > "$OUT/app-wait.html"
+# app-shaped server (app_ui + Places/Recent)
+g $P2 '/'                        > "$OUT/app-root.html"
+g $P2 '/sub/'                    > "$OUT/app-sub.html"
+g $P2 '/a.rs'                    > "$OUT/app-a-rs.html"
+g $P2 '/.ts/wait?path=/tmp/x'    > "$OUT/app-wait.html"
 echo "captured $(ls "$OUT" | wc -l) responses in $OUT"

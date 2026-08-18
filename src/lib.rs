@@ -143,12 +143,17 @@ pub struct Config {
     /// Site title. `None` means "name of the served directory", which follows
     /// the root when it changes.
     title: Option<String>,
+    /// Where the web server listens. Nothing else in here reads them: a caller
+    /// driving [`handle`] itself has no address to bind and no pool to size.
+    #[cfg(feature = "http")]
     pub bind: String,
+    #[cfg(feature = "http")]
     pub port: u16,
     pub theme: ThemeMode,
     pub ln: bool,
     pub sidebar: bool,
     pub show_hidden: bool,
+    #[cfg(feature = "http")]
     pub threads: usize,
     pub syn_light: EmbeddedThemeName,
     pub syn_dark: EmbeddedThemeName,
@@ -176,11 +181,6 @@ pub struct Config {
     /// in and read while a page renders, which is the whole point of it being
     /// separate from the two lists: they go out immediately and this catches up.
     status: RwLock<HashMap<String, RootStatus>>,
-    /// When set, requests must carry a matching `ts_token` cookie, obtained by
-    /// visiting `/.ts/auth?t=<token>&back=<path>`. Used by the desktop app,
-    /// where the loopback port would otherwise be open to any local process.
-    /// `None` — the CLI default — disables the check and the auth route.
-    token: Option<String>,
 }
 
 impl Config {
@@ -189,12 +189,15 @@ impl Config {
         Config {
             root: RwLock::new(Arc::new(Root::local(root))),
             title: None,
+            #[cfg(feature = "http")]
             bind: "127.0.0.1".to_string(),
+            #[cfg(feature = "http")]
             port: 8080,
             theme: ThemeMode::Auto,
             ln: true,
             sidebar: true,
             show_hidden: false,
+            #[cfg(feature = "http")]
             threads: 8,
             syn_light: EmbeddedThemeName::InspiredGithub,
             syn_dark: EmbeddedThemeName::OneHalfDark,
@@ -203,7 +206,6 @@ impl Config {
             recent: RwLock::new(Arc::new(Vec::new())),
             sections: RwLock::new(Arc::new(Vec::new())),
             status: RwLock::new(HashMap::new()),
-            token: None,
         }
     }
 
@@ -283,10 +285,6 @@ impl Config {
 
     pub fn set_title(&mut self, title: Option<String>) {
         self.title = title;
-    }
-
-    pub fn set_token(&mut self, token: Option<String>) {
-        self.token = token;
     }
 }
 
@@ -557,18 +555,6 @@ fn is_subresource(req: &Req) -> bool {
     )
 }
 
-/// True when a token is configured and the request does not present it.
-fn unauthorized(state: &State, req: &Req) -> bool {
-    let Some(token) = &state.cfg.token else {
-        return false;
-    };
-    let presented = req
-        .named("Cookie")
-        .flat_map(parse_cookies)
-        .any(|(k, v)| k == "ts_token" && &v == token);
-    !presented
-}
-
 /// Decides the answer to one request, touching no socket and no webview.
 ///
 /// This is the whole of treeserve as far as a caller is concerned: the HTTP
@@ -588,15 +574,6 @@ pub fn handle(state: &State, req: &Req) -> Reply {
     // One snapshot of the served root for the whole request, so a re-root
     // mid-request cannot hand half a page one tree and half another.
     let root = state.cfg.root();
-
-    // Token handshake, desktop builds only: hand out the cookie, then bounce
-    // to the requested page. Registered only when a token is configured.
-    if state.cfg.token.is_some() && path_raw == "/.ts/auth" {
-        return set_token(state, &query);
-    }
-    if unauthorized(state, req) {
-        return Reply::plain(403, "forbidden");
-    }
 
     // Internal routes (assets + preference cookies).
     match path_raw.as_str() {
@@ -724,25 +701,6 @@ fn set_prefs(query: &[(String, String)]) -> Reply {
         }
     }
     reply.with("Location", &back_target(query))
-}
-
-/// `/.ts/auth?t=<token>&back=/` — the desktop app's opening navigation. The
-/// cookie is session-scoped: a token is only valid for the run that minted it.
-fn set_token(state: &State, query: &[(String, String)]) -> Reply {
-    let ok = matches!(
-        (query_get(query, "t"), state.cfg.token.as_deref()),
-        (Some(given), Some(want)) if given == want
-    );
-    if !ok {
-        return Reply::plain(403, "forbidden");
-    }
-    let token = state.cfg.token.as_deref().unwrap_or_default();
-    Reply::empty(303)
-        .with(
-            "Set-Cookie",
-            &format!("ts_token={}; Path=/; SameSite=Lax", token),
-        )
-        .with("Location", &back_target(query))
 }
 
 /// Parse "bytes=a-b" | "bytes=a-" | "bytes=-n". Multi-range is ignored

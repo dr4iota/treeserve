@@ -1,6 +1,6 @@
 //! Two servers over one fixture, for `scripts/snap.sh` — a CLI-shaped one and
-//! an app-shaped one (app_ui, token, Places, Recent, one greyed entry), so a
-//! snapshot covers both kinds of page a refactor could disturb.
+//! an app-shaped one (app_ui, Places, Recent, one greyed entry), so a snapshot
+//! covers both kinds of page a refactor could disturb.
 //!
 //! Prints `PORTS <cli> <app>` and then sleeps; the script does the fetching.
 
@@ -21,7 +21,6 @@ fn main() {
     c2.port = 0;
     c2.threads = 2;
     c2.app_ui = true;
-    c2.set_token(Some("t0ken".to_string()));
     c2.places = vec![
         ("Home".to_string(), fx.join("sub").display().to_string()),
         ("Gone".to_string(), fx.join("gone").display().to_string()),

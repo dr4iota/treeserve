@@ -1,13 +1,14 @@
-//! Desktop shell around the treeserve HTTP server.
+//! Shell around treeserve's router.
 //!
-//! The server is the same one the CLI runs, bound to an OS-assigned loopback
-//! port, and the window is pointed at it. Everything the browser build does —
-//! cookies for preferences, 303 redirects, Range requests, relative links —
-//! therefore keeps working unchanged.
+//! The same router the CLI serves over HTTP, with no HTTP under it: the window
+//! opens on a scheme this shell registers, and every request the webview makes
+//! is answered by calling `treeserve::handle`. Everything the browser build
+//! does — cookies for preferences, 303 redirects, Range requests, relative
+//! links — keeps working unchanged, because all of it belongs to the router
+//! rather than to the socket that used to carry it.
 //!
-//! Because a loopback port is reachable by every process on the machine, the
-//! server is started with a per-run token; the window's first navigation
-//! exchanges it for a cookie and every later request is checked against it.
+//! Nothing is listening on anything. There is no address for another process
+//! on the machine to find, which is why there is nothing to authenticate to.
 
 use std::fs;
 use std::io;
@@ -100,8 +101,7 @@ impl Serving {
         &self.origin
     }
 
-    /// The token-handshake URL a fresh navigation should enter through; it
-    /// sets the cookie and bounces to `/`.
+    /// Where a fresh navigation should start: the served root.
     pub fn entry(&self) -> &str {
         &self.entry
     }
@@ -416,14 +416,9 @@ fn serve_root(app: &AppHandle, dir: PathBuf, remember: bool) {
 
     if let Some(serving) = app.try_state::<Serving>() {
         serving.state().cfg.set_root(dir.clone());
-        // Back to the listing root through the handshake, not straight to `/`.
-        // The window is built pointing at the handshake and this runs as soon as
-        // a path argument has been canonicalized, which is sooner than a webview
-        // starting under software rendering gets its first request out — so
-        // navigating to `/` here replaced the handshake before it happened, and
-        // the page it replaced it with was refused for want of the cookie the
-        // handshake had not set yet. The picker hid it: a dialog is long enough
-        // for the first navigation to land. The page-load hook retitles.
+        // Re-navigate: the root the window was showing has just been replaced.
+        // `entry` is the served root, which is all it is now that there is no
+        // cookie to collect on the way in. The page-load hook retitles.
         if let Some(win) = app.get_webview_window(WINDOW) {
             if let Ok(url) = serving.entry.parse() {
                 let _ = win.navigate(url);

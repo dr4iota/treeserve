@@ -37,6 +37,11 @@ pure = ["syntect/default-fancy", "two-face/syntect-fancy"]
 
 # Without `http` there is no server for it to start, and a binary that cannot
 # be built is better said here than discovered in the linker.
+# Drives `spawn`, so it needs the server that provides it.
+[[example]]
+name = "snapshot_server"
+required-features = ["http"]
+
 [[bin]]
 name = "treeserve"
 path = "src/main.rs"
