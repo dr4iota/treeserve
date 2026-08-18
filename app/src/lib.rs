@@ -50,6 +50,11 @@ struct Serving {
     inner: treeserve::Serving,
     /// `http://127.0.0.1:<port>`, the only origin the window may navigate to.
     origin: String,
+    /// The handshake URL the window opens with, kept so that every later
+    /// navigation can start from it too. It sets the cookie and bounces to `/`,
+    /// and doing it again costs one redirect — cheaper than any way of finding
+    /// out whether the first one has landed yet.
+    entry: String,
 }
 
 pub fn run() {
@@ -208,10 +213,16 @@ fn serve_root(app: &AppHandle, dir: PathBuf, remember: bool) {
 
     if let Some(serving) = app.try_state::<Serving>() {
         serving.inner.state.cfg.set_root(dir.clone());
-        // Back to the listing root; the token cookie is already set, and the
-        // page-load hook retitles the window.
+        // Back to the listing root through the handshake, not straight to `/`.
+        // The window is built pointing at the handshake and this runs as soon as
+        // a path argument has been canonicalized, which is sooner than a webview
+        // starting under software rendering gets its first request out — so
+        // navigating to `/` here replaced the handshake before it happened, and
+        // the page it replaced it with was refused for want of the cookie the
+        // handshake had not set yet. The picker hid it: a dialog is long enough
+        // for the first navigation to land. The page-load hook retitles.
         if let Some(win) = app.get_webview_window(WINDOW) {
-            if let Ok(url) = format!("{}/", serving.origin).parse() {
+            if let Ok(url) = serving.entry.parse() {
                 let _ = win.navigate(url);
             }
             // It may still be hidden: the window is built while the picker is up,
@@ -294,6 +305,7 @@ fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
     app.manage(Serving {
         inner,
         origin: origin.clone(),
+        entry: entry.clone(),
     });
 
     let win = WebviewWindowBuilder::new(
