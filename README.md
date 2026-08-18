@@ -30,7 +30,7 @@ Two crates, two binaries:
 
 | | |
 |---|---|
-| `treeserve` | the HTTP server and its CLI — ~3 MB, no system dependencies |
+| `treeserve` | the HTTP server and its CLI — ~8 MB, no system dependencies |
 | `treesight` | the desktop app: the same server in a native window |
 
 Plain `cargo build` at the root builds only `treeserve`, so the desktop app's
@@ -38,7 +38,8 @@ webview libraries (`libwebkit2gtk-4.1-dev` on Linux, WebView2 on Windows,
 WKWebView on macOS) are needed only when you ask for `treesight`.
 
 **Both binaries run fully offline.** Stylesheets, all ~30 syntax themes, the
-Markdown parser and the LaTeX→MathML renderer are compiled in; a served page
+Markdown parser, the Mermaid→SVG renderer and the LaTeX→MathML renderer are
+compiled in; a served page
 references no external host, so nothing is fetched at run time — no CDN, no
 webfonts, no telemetry. The only network access is at build time: `cargo`
 fetching crates, and, for `build.sh bundle`, the Tauri bundler fetching its
@@ -180,6 +181,14 @@ Example: `treeserve -p 9000 ~/projects/notes`
   strikethrough, autolinks, tag filtering, plus GitHub's footnotes, alerts
   and heading anchors). Fenced code blocks go through the same syntect
   pipeline. A “Source” link shows the highlighted raw file.
+- **Mermaid.** Fenced ` ```mermaid ` blocks (and standalone `.mmd` /
+  `.mermaid` files) are laid out on the server by mermaid-rs-renderer and
+  inlined as SVG — two copies, light and dark, so theme switching stays
+  pure CSS, the same way syntax colours do. Output is native-Rust SVG, not
+  pixel-identical to mermaid-cli. Diagrams that do not parse are shown as
+  source with the renderer message as a tooltip, like broken math. A fence
+  larger than 64 KiB is left as source so a huge diagram cannot stall a
+  worker.
 - **Math.** `$x$` and `\(x\)` inline; `$$x$$`, `\[x\]` and ```` ```math ````
   blocks for display math — the union of what GitHub and KaTeX accept. The
   LaTeX-native `\(…\)`/`\[…\]` pairs are rewritten to the dollar forms before
@@ -208,7 +217,7 @@ Example: `treeserve -p 9000 ~/projects/notes`
 
 - `?raw=1` – raw bytes (correct Content-Type, Range supported)
 - `?dl=1` – force download (Content-Disposition: attachment)
-- `?src=1` – highlighted source view for Markdown files
+- `?src=1` – highlighted source view for Markdown and Mermaid files
 - `?q=GLOB&r=1` – filter a directory listing (recursive with `r=1`)
 
 ## Desktop app — treesight
@@ -327,7 +336,8 @@ responses are byte-identical to the pre-workspace version.
 ## Direct dependencies
 
 `tiny_http` (sync HTTP server), `syntect` + `two-face` (highlighting),
-`comrak` (Markdown), `pulldown-latex` (LaTeX → MathML). Everything else —
+`comrak` (Markdown), `mermaid-rs-renderer` (Mermaid → SVG), `pulldown-latex`
+(LaTeX → MathML). Everything else —
 argument parsing, URL handling, templating, glob matching — is hand-rolled
 std-only Rust. The `treesight` crate adds `tauri` plus its dialog, opener and
 single-instance plugins.

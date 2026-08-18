@@ -8,8 +8,8 @@
 #                Windows.
 #
 # Neither binary reads anything from disk beyond the folder you point it at:
-# stylesheets, all syntax themes, the Markdown parser and the LaTeX renderer
-# are compiled in, and nothing is fetched at run time.
+# stylesheets, all syntax themes, the Markdown parser, the Mermaid renderer
+# and the LaTeX renderer are compiled in, and nothing is fetched at run time.
 #
 # Usage:
 #   ./build.sh                    server + app  -> dist/

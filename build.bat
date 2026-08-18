@@ -8,8 +8,8 @@ rem                    runtime at run time; that ships with Windows 11 and
 rem                    current Windows 10.
 rem
 rem Neither binary reads anything from disk beyond the folder you point it at:
-rem stylesheets, all syntax themes, the Markdown parser and the LaTeX renderer
-rem are compiled in, and nothing is fetched at run time.
+rem stylesheets, all syntax themes, the Markdown parser, the Mermaid renderer
+rem and the LaTeX renderer are compiled in, and nothing is fetched at run time.
 rem
 rem Usage:
 rem   build.bat                 server + app  -^> dist\

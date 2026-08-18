@@ -461,6 +461,33 @@ form.filter button:hover { border-color: var(--accent); color: var(--accent); }
 .md .footnote-ref { text-decoration: none; }
 .md .footnote-backref { text-decoration: none; }
 
+/* Mermaid: two server-rendered SVGs, one shown per theme. Colours are baked
+   into the markup (the renderer has no CSS variables), so this is the same
+   trick as the two syntax stylesheets: light for paper and for a light page,
+   dark only on a dark screen. */
+.md .mermaid {
+  margin: 1rem 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.md .mermaid svg { display: block; max-width: 100%; height: auto; }
+.md .mermaid-dark { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .md .mermaid-light { display: none; }
+  :root:not([data-theme="light"]) .md .mermaid-dark { display: block; }
+}
+:root[data-theme="dark"] .md .mermaid-light { display: none; }
+:root[data-theme="dark"] .md .mermaid-dark { display: block; }
+.md pre.mermaid-error {
+  color: var(--err);
+  border: 1px solid var(--err);
+  border-radius: 8px;
+  padding: .8rem 1rem;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  cursor: help;
+}
+
 /* Media views */
 .preview-img {
   max-width: 100%;
@@ -641,4 +668,6 @@ body.app main { overflow-y: auto; }
   main, body.app main, body:has(main > .fit) main { padding: 0; overflow: visible; }
   /* A heading is no use at the foot of a page with nothing of its own under it. */
   .md h1, .md h2, .md h3, .md h4 { break-after: avoid; }
+  .md .mermaid-light { display: block !important; }
+  .md .mermaid-dark { display: none !important; }
 }

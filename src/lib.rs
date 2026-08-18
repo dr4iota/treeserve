@@ -26,6 +26,25 @@ use hl::Hl;
 use page::{Prefs, ThemeMode};
 use util::*;
 
+/// glibc keeps giving the single-precision math functions new symbol versions
+/// — `hypotf` in 2.35, `atan2f` in 2.43 — so a binary built on a host that has
+/// them will not start on anything older, and the Mermaid renderer calls both.
+/// Define the symbols ourselves, in pure Rust, and the references are
+/// satisfied at link time instead of against the build host's libm. Only glibc
+/// versions its symbols this way; elsewhere the platform's own definition would
+/// collide with ours at link time, so leave those alone.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn atan2f(y: f32, x: f32) -> f32 {
+    libm::atan2f(y, x)
+}
+
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn hypotf(x: f32, y: f32) -> f32 {
+    libm::hypotf(x, y)
+}
+
 const APP_CSS: &str = include_str!("app.css");
 const MATH_CSS: &str = include_str!("math.css");
 

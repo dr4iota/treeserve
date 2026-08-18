@@ -9,8 +9,13 @@ use comrak::{format_html_with_plugins, parse_document, Arena, Options};
 use pulldown_latex::config::DisplayMode;
 use pulldown_latex::{push_mathml, Parser as LatexParser, RenderConfig, Storage};
 
+use mermaid_rs_renderer::{render_with_options, RenderOptions, Theme};
+
 use crate::hl::Hl;
 use crate::util::html_escape;
+
+/// A mermaid fence larger than this is shown as source rather than laid out.
+const MAX_MERMAID_BYTES: usize = 64 * 1024;
 
 /// Routes fenced code blocks through the same syntect pipeline used for
 /// standalone files, so markdown code gets identical class-based highlighting.
@@ -181,6 +186,117 @@ fn render_math_nodes<'a>(root: Node<'a>) {
 /// First token of a code fence info string, as comrak splits it.
 fn info_lang(info: &str) -> &str {
     info.split_whitespace().next().unwrap_or("")
+}
+
+/// Replaces ` ```mermaid ` fences with inline SVG (light and dark), the same
+/// way math fences become MathML. Failure is not fatal: the source is shown
+/// with the renderer message as a tooltip.
+fn render_mermaid_nodes<'a>(root: Node<'a>) {
+    let mut targets: Vec<(Node<'a>, String)> = Vec::new();
+    for node in root.descendants() {
+        if let NodeValue::CodeBlock(cb) = &node.data().value
+            && info_lang(&cb.info).eq_ignore_ascii_case("mermaid")
+        {
+            targets.push((node, cb.literal.trim_end_matches('\n').to_string()));
+        }
+    }
+    for (node, src) in targets {
+        node.data_mut().value = NodeValue::Raw(render_mermaid_figure(&src));
+    }
+}
+
+/// Light and dark SVG for a standalone mermaid source (a `.mmd` file, or the
+/// body of a fence).
+pub fn render_mermaid_figure(src: &str) -> String {
+    match mermaid_svgs(src) {
+        Ok((light, dark)) => format!(
+            "<figure class=\"mermaid\"><div class=\"mermaid-light\">{}</div>\
+             <div class=\"mermaid-dark\">{}</div></figure>",
+            light, dark
+        ),
+        Err(err) => format!(
+            "<pre class=\"mermaid-error\" title=\"{}\">{}</pre>",
+            html_escape(&err),
+            html_escape(src.trim())
+        ),
+    }
+}
+
+fn mermaid_svgs(src: &str) -> Result<(String, String), String> {
+    if src.len() > MAX_MERMAID_BYTES {
+        return Err("diagram too large to render".to_string());
+    }
+    if src.trim().is_empty() {
+        return Err("empty diagram".to_string());
+    }
+
+    let light_opts = RenderOptions::modern();
+    let dark_opts = RenderOptions {
+        theme: Theme::dark(),
+        ..RenderOptions::modern()
+    };
+
+    let light = render_with_options(src, light_opts).map_err(|e| mermaid_err_line(&e))?;
+    let dark = render_with_options(src, dark_opts).map_err(|e| mermaid_err_line(&e))?;
+    Ok((inline_svg(&light)?, inline_svg(&dark)?))
+}
+
+fn mermaid_err_line(err: &impl ToString) -> String {
+    err.to_string()
+        .lines()
+        .next()
+        .unwrap_or("invalid mermaid")
+        .to_string()
+}
+
+/// Keep only SVG we can drop into HTML: no XML prologue, no script, no
+/// event-handler attributes. The crate emits its own markup from an IR, so
+/// this is defense in depth against a label that slipped through unescaped.
+fn inline_svg(svg: &str) -> Result<String, String> {
+    let t = svg.trim();
+    if !t.starts_with("<svg") {
+        return Err("renderer did not produce SVG".to_string());
+    }
+    let lower = t.to_ascii_lowercase();
+    if lower.contains("<script") || lower.contains("javascript:") {
+        return Err("renderer produced unsafe SVG".to_string());
+    }
+    if svg_has_on_handler(&lower) {
+        return Err("renderer produced unsafe SVG".to_string());
+    }
+    Ok(t.to_string())
+}
+
+fn svg_has_on_handler(lower: &str) -> bool {
+    let b = lower.as_bytes();
+    let mut in_tag = false;
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'<' => in_tag = true,
+            b'>' => in_tag = false,
+            b' ' | b'\t' | b'\n' | b'\r' | b'/'
+                if in_tag
+                    && b.get(i + 1) == Some(&b'o')
+                    && b.get(i + 2) == Some(&b'n')
+                    && b.get(i + 3).is_some_and(u8::is_ascii_alphabetic) =>
+            {
+                let mut j = i + 3;
+                while j < b.len() && b[j].is_ascii_alphabetic() {
+                    j += 1;
+                }
+                while j < b.len() && b[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                if j < b.len() && b[j] == b'=' {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Rewrites the LaTeX-native delimiters — `\(x\)` and `\[x\]`, KaTeX's own
@@ -431,10 +547,73 @@ pub fn render_markdown(hl: &Hl, src: &str) -> String {
     let arena = Arena::new();
     let root = parse_document(&arena, &src, &options);
     render_math_nodes(root);
+    render_mermaid_nodes(root);
 
     let mut out = String::with_capacity(src.len() * 3 / 2);
     match format_html_with_plugins(root, &options, &mut out, &plugins) {
         Ok(()) => out,
         Err(_) => format!("<pre>{}</pre>", html_escape(&src)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hl::Hl;
+
+    fn html(src: &str) -> String {
+        render_markdown(&Hl::for_tests(), src)
+    }
+
+    #[test]
+    fn mermaid_fence_becomes_dual_svg() {
+        let out = html("```mermaid\nflowchart LR\n    A --> B\n```\n");
+        assert!(out.contains("class=\"mermaid\""), "{out}");
+        assert!(out.contains("mermaid-light"), "{out}");
+        assert!(out.contains("mermaid-dark"), "{out}");
+        assert_eq!(out.matches("<svg").count(), 2, "{out}");
+    }
+
+    #[test]
+    fn mermaid_error_keeps_source() {
+        let out = html("```mermaid\nthis is not a diagram\n```\n");
+        assert!(out.contains("mermaid-error"), "{out}");
+        assert!(out.contains("this is not a diagram"), "{out}");
+        assert!(!out.contains("<svg"), "{out}");
+    }
+
+    #[test]
+    fn rust_fence_is_not_mermaid() {
+        let out = html("```rust\nfn main() {}\n```\n");
+        assert!(out.contains("hl-code"), "{out}");
+        assert!(!out.contains("class=\"mermaid\""), "{out}");
+    }
+
+    #[test]
+    fn inline_mermaid_token_stays_code() {
+        let out = html("see `mermaid` in a sentence\n");
+        assert!(out.contains("<code>mermaid</code>"), "{out}");
+        assert!(!out.contains("class=\"mermaid\""), "{out}");
+    }
+
+    #[test]
+    fn math_dollar_and_fence() {
+        let inline = html("a $x$ b\n");
+        assert!(inline.contains("<math"), "{inline}");
+        let block = html("```math\nx^2\n```\n");
+        assert!(block.contains("<math"), "{block}");
+        assert!(block.contains("math-block"), "{block}");
+    }
+
+    #[test]
+    fn tex_delimiters_in_prose() {
+        assert_eq!(expand_tex_delimiters(r"a \(x\) b").as_ref(), "a $x$ b");
+        assert_eq!(expand_tex_delimiters("a \\[x\\] b").as_ref(), "a $$x$$ b");
+    }
+
+    #[test]
+    fn tex_delimiters_leave_fences_alone() {
+        let src = "```\n\\(x\\)\n```\n";
+        assert_eq!(expand_tex_delimiters(src).as_ref(), src);
     }
 }

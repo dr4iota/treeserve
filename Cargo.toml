@@ -8,13 +8,15 @@ default-members = ["."]
 name = "treeserve"
 version = "0.1.0"
 edition = "2024"
-description = "Single-binary file/code tree server with server-rendered syntax highlighting, markdown, LaTeX math and dark/light themes — zero JS"
+description = "Single-binary file/code tree server with server-rendered syntax highlighting, markdown, Mermaid diagrams, LaTeX math and dark/light themes — zero JS"
 license = "MIT OR Apache-2.0"
 keywords = ["file-server", "http", "markdown", "syntax-highlighting", "cli"]
 categories = ["command-line-utilities", "web-programming::http-server"]
 
 [dependencies]
 comrak = { version = "0.52.0", default-features = false }
+libm = "0.2"
+mermaid-rs-renderer = { version = "0.3", default-features = false }
 pulldown-latex = "0.8.0"
 syntect = { version = "5.3.0", default-features = false }
 tiny_http = "0.12.0"

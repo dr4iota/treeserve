@@ -223,7 +223,7 @@ fn icon_for(name: &str, is_dir: bool) -> &'static str {
         ICON_AUDIO
     } else if VIDEO_EXTS.contains(&ext.as_str()) {
         ICON_VIDEO
-    } else if MARKDOWN_EXTS.contains(&ext.as_str()) {
+    } else if MARKDOWN_EXTS.contains(&ext.as_str()) || MERMAID_EXTS.contains(&ext.as_str()) {
         ICON_DOC
     } else {
         ICON_FILE

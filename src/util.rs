@@ -259,6 +259,7 @@ pub const IMAGE_EXTS: &[&str] = &[
 pub const AUDIO_EXTS: &[&str] = &["mp3", "ogg", "oga", "opus", "wav", "flac", "m4a"];
 pub const VIDEO_EXTS: &[&str] = &["mp4", "m4v", "webm", "mkv", "mov", "ogv"];
 pub const MARKDOWN_EXTS: &[&str] = &["md", "markdown", "mdown", "mkd"];
+pub const MERMAID_EXTS: &[&str] = &["mmd", "mermaid"];
 
 pub fn human_size(n: u64) -> String {
     const UNITS: &[&str] = &["B", "K", "M", "G", "T"];

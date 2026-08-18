@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::md::render_markdown;
+use crate::md::{render_markdown, render_mermaid_figure};
 use crate::page::{
     bare_layout, flag, layout, svg_icon, Prefs, ICON_DOWNLOAD, ICON_PRINT, ICON_RAW, ICON_RENDERED,
     ICON_SOURCE,
@@ -188,22 +188,30 @@ pub fn file_page(
     let text = String::from_utf8_lossy(&bytes);
     let want_source = query_get(query, "src") == Some("1");
 
-    if MARKDOWN_EXTS.contains(&ext.as_str()) && !want_source {
-        let body = render_markdown(&state.hl, &text);
-        let controls = format!(
-            "{}{}{}",
-            print_flag(state),
-            flag(
-                "",
-                &format!("{}?src=1", href_path(rel)),
-                &svg_icon(ICON_SOURCE),
-                "Source",
-                "Highlighted source instead"
-            ),
-            std_controls(rel)
-        );
-        let content = format!("<div class=\"md\">{}</div>", body);
-        return layout(state, prefs, rel, url_now, &controls, false, &content);
+    if !want_source {
+        let body = if MARKDOWN_EXTS.contains(&ext.as_str()) {
+            Some(render_markdown(&state.hl, &text))
+        } else if MERMAID_EXTS.contains(&ext.as_str()) {
+            Some(render_mermaid_figure(&text))
+        } else {
+            None
+        };
+        if let Some(body) = body {
+            let controls = format!(
+                "{}{}{}",
+                print_flag(state),
+                flag(
+                    "",
+                    &format!("{}?src=1", href_path(rel)),
+                    &svg_icon(ICON_SOURCE),
+                    "Source",
+                    "Highlighted source instead"
+                ),
+                std_controls(rel)
+            );
+            let content = format!("<div class=\"md\">{}</div>", body);
+            return layout(state, prefs, rel, url_now, &controls, false, &content);
+        }
     }
 
     // Highlighted source view.
@@ -224,7 +232,7 @@ pub fn file_page(
     };
 
     let mut controls = print_flag(state);
-    if MARKDOWN_EXTS.contains(&ext.as_str()) {
+    if MARKDOWN_EXTS.contains(&ext.as_str()) || MERMAID_EXTS.contains(&ext.as_str()) {
         controls.push_str(&flag(
             "",
             &href_path(rel),

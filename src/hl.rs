@@ -47,6 +47,23 @@ impl Hl {
         Hl { ss, css_light, css_dark }
     }
 
+    #[cfg(test)]
+    pub fn for_tests() -> Hl {
+        use std::sync::OnceLock;
+        static HL: OnceLock<Hl> = OnceLock::new();
+        let hl = HL.get_or_init(|| {
+            Hl::new(
+                EmbeddedThemeName::InspiredGithub,
+                EmbeddedThemeName::OneHalfDark,
+            )
+        });
+        Hl {
+            ss: hl.ss.clone(),
+            css_light: hl.css_light.clone(),
+            css_dark: hl.css_dark.clone(),
+        }
+    }
+
     /// Pick a syntax for a file: extension, then full name (Makefile etc.),
     /// then shebang / first line, then plain text.
     pub fn syntax_for(&self, name: &str, ext: &str, first_line: &str) -> &SyntaxReference {
