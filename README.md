@@ -26,6 +26,9 @@ build.bat install C:\WinApps
 Both scripts print what they produced and warn when the destination is not on
 your `PATH`.
 
+How the two crates share a server, how a request becomes a page, and where
+a downstream app may plug in: [docs/architecture.md](docs/architecture.md).
+
 Two crates, two binaries:
 
 | | |
