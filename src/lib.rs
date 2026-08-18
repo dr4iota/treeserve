@@ -439,22 +439,130 @@ pub fn spawn(cfg: Config) -> Result<Serving, Box<dyn std::error::Error + Send + 
     })
 }
 
+/// A request, as the part of this that decides what to answer sees it.
+///
+/// Owns its strings rather than borrowing them. tiny_http lends them from a
+/// socket it is still holding; a webview's protocol handler has no socket and
+/// no lifetime to lend from. Copying a handful of small headers is what buys
+/// the same routing code two callers.
+pub struct Req {
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+    pub is_get: bool,
+}
+
+impl Req {
+    /// First header with this name, matched case-insensitively as HTTP means it.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.named(name).next()
+    }
+
+    /// Every header with this name. `Cookie` may legitimately arrive more than
+    /// once, and taking only the first would silently drop preferences.
+    fn named<'a>(&'a self, name: &str) -> impl Iterator<Item = &'a str> + 'a {
+        // Owned, so the returned iterator outlives the name it was asked for.
+        let name = name.to_ascii_lowercase();
+        self.headers
+            .iter()
+            .filter(move |(k, _)| k.eq_ignore_ascii_case(&name))
+            .map(|(_, v)| v.as_str())
+    }
+}
+
+/// What a reply carries. `Stream` is a handle the caller pumps rather than a
+/// buffer we filled: a film is served without being read.
+pub enum Body {
+    Empty,
+    Text(String),
+    Stream {
+        reader: Box<dyn Read + Send>,
+        len: u64,
+    },
+}
+
+/// An answer, decided but not yet written. Whoever asked decides how it goes
+/// out — down a socket, or back through a webview.
+pub struct Reply {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Body,
+}
+
+fn hdr(k: &str, v: &str) -> (String, String) {
+    (k.to_string(), v.to_string())
+}
+
+impl Reply {
+    fn empty(status: u16) -> Reply {
+        Reply {
+            status,
+            headers: Vec::new(),
+            body: Body::Empty,
+        }
+    }
+
+    fn text(status: u16, ctype: &str, body: impl Into<String>) -> Reply {
+        Reply {
+            status,
+            headers: vec![hdr("Content-Type", ctype)],
+            body: Body::Text(body.into()),
+        }
+    }
+
+    fn plain(status: u16, body: &str) -> Reply {
+        Reply::text(status, "text/plain; charset=utf-8", body)
+    }
+
+    fn with(mut self, k: &str, v: &str) -> Reply {
+        self.headers.push(hdr(k, v));
+        self
+    }
+}
+
 fn h(k: &str, v: &str) -> Header {
     Header::from_bytes(k.as_bytes(), v.as_bytes()).expect("valid header")
 }
 
-fn html_resp(status: u16, body: String) -> Response<Cursor<Vec<u8>>> {
-    Response::from_string(body)
-        .with_status_code(StatusCode(status))
-        .with_header(h("Content-Type", "text/html; charset=utf-8"))
-        .with_header(h("X-Content-Type-Options", "nosniff"))
+/// Everything tiny_http knows that the router does not.
+fn req_from(rq: &Request) -> Req {
+    Req {
+        url: rq.url().to_string(),
+        headers: rq
+            .headers()
+            .iter()
+            .map(|hd| (hd.field.as_str().as_str().to_string(), hd.value.as_str().to_string()))
+            .collect(),
+        is_get: *rq.method() == Method::Get,
+    }
+}
+
+/// Writes a decided answer down the socket it came from.
+fn write_reply(rq: Request, reply: Reply) {
+    let headers: Vec<Header> = reply.headers.iter().map(|(k, v)| h(k, v)).collect();
+    let status = StatusCode(reply.status);
+    let _ = match reply.body {
+        Body::Empty => rq.respond(Response::new(status, headers, std::io::empty(), Some(0), None)),
+        Body::Text(body) => {
+            let len = body.len();
+            let cursor = Cursor::new(body.into_bytes());
+            rq.respond(Response::new(status, headers, cursor, Some(len), None))
+        }
+        Body::Stream { reader, len } => {
+            rq.respond(Response::new(status, headers, reader, Some(len as usize), None))
+        }
+    };
+}
+
+fn html_reply(status: u16, body: String) -> Reply {
+    Reply::text(status, "text/html; charset=utf-8", body)
+        .with("X-Content-Type-Options", "nosniff")
         // Every page is a snapshot of a directory taken when it was asked for,
         // and none of it is worth keeping: what a listing says is true of a
         // moment, and which listing you get at all depends on cookies and on the
         // root the shell currently serves. Saying nothing here left the browser
         // to invent a lifetime of its own, and the one thing a Refresh button
         // must not do is hand back the page it was pressed on.
-        .with_header(h("Cache-Control", "no-store"))
+        .with("Cache-Control", "no-store")
 }
 
 /// A stylesheet, tagged with which stylesheet it is.
@@ -466,20 +574,19 @@ fn html_resp(status: u16, body: String) -> Response<Cursor<Vec<u8>>> {
 /// takes to conclude that a change did not work. `no-cache` is "ask first", not
 /// "keep nothing": the copy stays where it is, and a load spends one small
 /// conditional request finding out whether it is still the right one.
-fn css_reply(rq: Request, body: &str) {
+fn css_reply(req: &Req, body: &str) -> Reply {
     let tag = text_etag(body);
-    if header_value(&rq, "If-None-Match").is_some_and(|given| etag_matches(given, &tag)) {
-        let resp = Response::empty(StatusCode(304))
-            .with_header(h("ETag", &tag))
-            .with_header(h("Cache-Control", "no-cache"));
-        let _ = rq.respond(resp);
-        return;
+    if req
+        .header("If-None-Match")
+        .is_some_and(|given| etag_matches(given, &tag))
+    {
+        return Reply::empty(304)
+            .with("ETag", &tag)
+            .with("Cache-Control", "no-cache");
     }
-    let resp = Response::from_string(body)
-        .with_header(h("Content-Type", "text/css; charset=utf-8"))
-        .with_header(h("Cache-Control", "no-cache"))
-        .with_header(h("ETag", &tag));
-    let _ = rq.respond(resp);
+    Reply::text(200, "text/css; charset=utf-8", body)
+        .with("Cache-Control", "no-cache")
+        .with("ETag", &tag)
 }
 
 /// A tag for a stylesheet we hold in memory: what it says, not when it was
@@ -494,21 +601,14 @@ fn text_etag(body: &str) -> String {
     format!("\"{:x}\"", hasher.finish())
 }
 
-fn header_value<'a>(rq: &'a Request, name: &'static str) -> Option<&'a str> {
-    rq.headers()
-        .iter()
-        .find(|hd| hd.field.equiv(name))
-        .map(|hd| hd.value.as_str())
-}
-
-fn prefs_from(state: &State, rq: &Request) -> Prefs {
+fn prefs_from(state: &State, req: &Req) -> Prefs {
     let mut prefs = Prefs {
         theme: state.cfg.theme,
         ln: state.cfg.ln,
         sidebar: state.cfg.sidebar,
     };
-    for hd in rq.headers().iter().filter(|hd| hd.field.equiv("Cookie")) {
-        for (k, v) in parse_cookies(hd.value.as_str()) {
+    for value in req.named("Cookie") {
+        for (k, v) in parse_cookies(value) {
             match k.as_str() {
                 "ts_theme" => {
                     if let Some(t) = ThemeMode::from_str(&v) {
@@ -524,50 +624,54 @@ fn prefs_from(state: &State, rq: &Request) -> Prefs {
     prefs
 }
 
-fn wants_html(rq: &Request) -> bool {
-    header_value(rq, "Accept")
+fn wants_html(req: &Req) -> bool {
+    req.header("Accept")
         .map(|a| a.to_ascii_lowercase().contains("text/html"))
         .unwrap_or(false)
 }
 
 /// Subresource loads (e.g. <img src="relative.png"> inside rendered
 /// markdown) must get raw bytes even without ?raw=1.
-fn is_subresource(rq: &Request) -> bool {
+fn is_subresource(req: &Req) -> bool {
     matches!(
-        header_value(rq, "Sec-Fetch-Dest"),
+        req.header("Sec-Fetch-Dest"),
         Some("image" | "video" | "audio" | "embed" | "object" | "font")
     )
 }
 
 /// True when a token is configured and the request does not present it.
-fn unauthorized(state: &State, rq: &Request) -> bool {
+fn unauthorized(state: &State, req: &Req) -> bool {
     let Some(token) = &state.cfg.token else {
         return false;
     };
-    let presented = rq
-        .headers()
-        .iter()
-        .filter(|hd| hd.field.equiv("Cookie"))
-        .flat_map(|hd| parse_cookies(hd.value.as_str()))
+    let presented = req
+        .named("Cookie")
+        .flat_map(parse_cookies)
         .any(|(k, v)| k == "ts_token" && &v == token);
     !presented
 }
 
 fn respond(state: &State, rq: Request) {
-    if *rq.method() != Method::Get {
-        let _ = rq.respond(
-            Response::from_string("method not allowed").with_status_code(StatusCode(405)),
-        );
-        return;
+    let req = req_from(&rq);
+    write_reply(rq, handle(state, &req));
+}
+
+/// Decides the answer to one request, touching no socket and no webview.
+///
+/// This is the whole of treeserve as far as a caller is concerned: the HTTP
+/// server pumps it, and so can anything else holding a [`Req`].
+pub fn handle(state: &State, req: &Req) -> Reply {
+    if !req.is_get {
+        return Reply::plain(405, "method not allowed");
     }
 
-    let url_now = rq.url().to_string();
+    let url_now = req.url.clone();
     let (path_raw, query_raw) = match url_now.split_once('?') {
         Some((p, q)) => (p.to_string(), q.to_string()),
         None => (url_now.clone(), String::new()),
     };
     let query = parse_query(&query_raw);
-    let prefs = prefs_from(state, &rq);
+    let prefs = prefs_from(state, req);
     // One snapshot of the served root for the whole request, so a re-root
     // mid-request cannot hand half a page one tree and half another.
     let root = state.cfg.root();
@@ -575,46 +679,25 @@ fn respond(state: &State, rq: Request) {
     // Token handshake, desktop builds only: hand out the cookie, then bounce
     // to the requested page. Registered only when a token is configured.
     if state.cfg.token.is_some() && path_raw == "/.ts/auth" {
-        set_token(state, rq, &query);
-        return;
+        return set_token(state, &query);
     }
-    if unauthorized(state, &rq) {
-        let _ = rq.respond(Response::from_string("forbidden").with_status_code(StatusCode(403)));
-        return;
+    if unauthorized(state, req) {
+        return Reply::plain(403, "forbidden");
     }
 
     // Internal routes (assets + preference cookies).
     match path_raw.as_str() {
-        "/.ts/app.css" => {
-            css_reply(rq, APP_CSS);
-            return;
-        }
-        "/.ts/math.css" => {
-            css_reply(rq, MATH_CSS);
-            return;
-        }
-        "/.ts/syntax-light.css" => {
-            css_reply(rq, &state.hl.css_light);
-            return;
-        }
-        "/.ts/syntax-dark.css" => {
-            css_reply(rq, &state.hl.css_dark);
-            return;
-        }
-        "/.ts/set" => {
-            set_prefs(rq, &query);
-            return;
-        }
+        "/.ts/app.css" => return css_reply(req, APP_CSS),
+        "/.ts/math.css" => return css_reply(req, MATH_CSS),
+        "/.ts/syntax-light.css" => return css_reply(req, &state.hl.css_light),
+        "/.ts/syntax-dark.css" => return css_reply(req, &state.hl.css_dark),
+        "/.ts/set" => return set_prefs(&query),
         // Somewhere for the shell to park the window while it finds out whether a
         // folder opens. Only it ever navigates here, and only when `app_ui` is on;
         // served on its own this is a page about nothing.
         "/.ts/wait" if state.cfg.app_ui => {
             let path = query_get(&query, "path").unwrap_or_default();
-            let _ = rq.respond(html_resp(
-                200,
-                page::wait_page(state, &root, prefs, &url_now, path),
-            ));
-            return;
+            return html_reply(200, page::wait_page(state, &root, prefs, &url_now, path));
         }
         _ => {}
     }
@@ -623,25 +706,22 @@ fn respond(state: &State, rq: Request) {
     let (rel, canon) = match resolve_in_root(root.vfs.as_ref(), &path_raw) {
         Ok(r) => (r.rel, r.path),
         Err(PathError::Bad) => {
-            let _ = rq.respond(html_resp(
+            return html_reply(
                 400,
                 page::error_page(state, &root, prefs, &[], &url_now, 400, "bad path"),
-            ));
-            return;
+            );
         }
         Err(PathError::Missing(rel)) => {
-            let _ = rq.respond(html_resp(
+            return html_reply(
                 404,
                 page::error_page(state, &root, prefs, &rel, &url_now, 404, "not found"),
-            ));
-            return;
+            );
         }
         Err(PathError::Outside(rel)) => {
-            let _ = rq.respond(html_resp(
+            return html_reply(
                 403,
                 page::error_page(state, &root, prefs, &rel, &url_now, 403, "forbidden"),
-            ));
-            return;
+            );
         }
     };
 
@@ -658,19 +738,16 @@ fn respond(state: &State, rq: Request) {
             } else {
                 format!("{}/?{}", path_raw, query_raw)
             };
-            let _ = rq.respond(Response::empty(StatusCode(301)).with_header(h("Location", &loc)));
-            return;
+            return Reply::empty(301).with("Location", &loc);
         }
-        if wants_html(&rq) {
-            let body = page::listing_page(state, &root, prefs, &rel, &canon, &query, &url_now);
-            let _ = rq.respond(html_resp(200, body));
+        return if wants_html(req) {
+            html_reply(
+                200,
+                page::listing_page(state, &root, prefs, &rel, &canon, &query, &url_now),
+            )
         } else {
-            let _ = rq.respond(
-                Response::from_string(page::listing_text(state, root.vfs.as_ref(), &canon))
-                    .with_header(h("Content-Type", "text/plain; charset=utf-8")),
-            );
-        }
-        return;
+            Reply::plain(200, &page::listing_text(state, root.vfs.as_ref(), &canon))
+        };
     }
 
     let name = rel.last().cloned().unwrap_or_default();
@@ -687,22 +764,21 @@ fn respond(state: &State, rq: Request) {
     // sees this page.
     let bare = query_get(&query, "bare") == Some("1");
     let framed = want_raw && !want_dl && !bare;
-    if framed && wants_html(&rq) && !is_subresource(&rq) {
-        let body = view::raw_page(state, &root, prefs, &rel, &url_now);
-        let _ = rq.respond(html_resp(200, body));
-        return;
+    if framed && wants_html(req) && !is_subresource(req) {
+        return html_reply(200, view::raw_page(state, &root, prefs, &rel, &url_now));
     }
-    if want_raw || want_dl || !wants_html(&rq) || is_subresource(&rq) {
-        serve_raw(rq, root.vfs.as_ref(), &canon, &name, want_dl);
-        return;
+    if want_raw || want_dl || !wants_html(req) || is_subresource(req) {
+        return serve_raw(req, root.vfs.as_ref(), &canon, &name, want_dl);
     }
 
-    let body = view::file_page(state, &root, prefs, &rel, &canon, &query, &url_now);
-    let _ = rq.respond(html_resp(200, body));
+    html_reply(
+        200,
+        view::file_page(state, &root, prefs, &rel, &canon, &query, &url_now),
+    )
 }
 
-fn cookie_header(k: &str, v: &str) -> Header {
-    h(
+fn cookie_header(k: &str, v: &str) -> (String, String) {
+    hdr(
         "Set-Cookie",
         &format!("{}={}; Path=/; Max-Age=31536000; SameSite=Lax", k, v),
     )
@@ -718,45 +794,42 @@ fn back_target(query: &[(String, String)]) -> String {
 
 /// `/.ts/set?theme=dark&ln=1&sidebar=0&back=/some/where` — store prefs in
 /// cookies and bounce back. Pure SSR option switching, no JS.
-fn set_prefs(rq: Request, query: &[(String, String)]) {
-    let mut resp = Response::empty(StatusCode(303));
+fn set_prefs(query: &[(String, String)]) -> Reply {
+    let mut reply = Reply::empty(303);
     for (k, v) in query {
         match k.as_str() {
             "theme" if ThemeMode::from_str(v).is_some() => {
-                resp.add_header(cookie_header("ts_theme", v));
+                reply.headers.push(cookie_header("ts_theme", v));
             }
             "ln" if v == "0" || v == "1" => {
-                resp.add_header(cookie_header("ts_ln", v));
+                reply.headers.push(cookie_header("ts_ln", v));
             }
             "sidebar" if v == "0" || v == "1" => {
-                resp.add_header(cookie_header("ts_sidebar", v));
+                reply.headers.push(cookie_header("ts_sidebar", v));
             }
             _ => {}
         }
     }
-    resp.add_header(h("Location", &back_target(query)));
-    let _ = rq.respond(resp);
+    reply.with("Location", &back_target(query))
 }
 
 /// `/.ts/auth?t=<token>&back=/` — the desktop app's opening navigation. The
 /// cookie is session-scoped: a token is only valid for the run that minted it.
-fn set_token(state: &State, rq: Request, query: &[(String, String)]) {
+fn set_token(state: &State, query: &[(String, String)]) -> Reply {
     let ok = matches!(
         (query_get(query, "t"), state.cfg.token.as_deref()),
         (Some(given), Some(want)) if given == want
     );
     if !ok {
-        let _ = rq.respond(Response::from_string("forbidden").with_status_code(StatusCode(403)));
-        return;
+        return Reply::plain(403, "forbidden");
     }
     let token = state.cfg.token.as_deref().unwrap_or_default();
-    let mut resp = Response::empty(StatusCode(303));
-    resp.add_header(h(
-        "Set-Cookie",
-        &format!("ts_token={}; Path=/; SameSite=Lax", token),
-    ));
-    resp.add_header(h("Location", &back_target(query)));
-    let _ = rq.respond(resp);
+    Reply::empty(303)
+        .with(
+            "Set-Cookie",
+            &format!("ts_token={}; Path=/; SameSite=Lax", token),
+        )
+        .with("Location", &back_target(query))
 }
 
 /// Parse "bytes=a-b" | "bytes=a-" | "bytes=-n". Multi-range is ignored
@@ -811,10 +884,9 @@ fn etag_matches(given: &str, tag: &str) -> bool {
             .any(|t| t.strip_prefix("W/").unwrap_or(t) == tag)
 }
 
-fn serve_raw(rq: Request, vfs: &dyn Vfs, path: &VfsPath, name: &str, attachment: bool) {
+fn serve_raw(req: &Req, vfs: &dyn Vfs, path: &VfsPath, name: &str, attachment: bool) -> Reply {
     let Ok(mut file) = vfs.open(path) else {
-        let _ = rq.respond(Response::from_string("not found").with_status_code(StatusCode(404)));
-        return;
+        return Reply::plain(404, "not found");
     };
     // The size of the handle being streamed, not of whatever the path names
     // by the time a second lookup runs — a file replaced between the two
@@ -836,71 +908,69 @@ fn serve_raw(rq: Request, vfs: &dyn Vfs, path: &VfsPath, name: &str, attachment:
     // stays where it is and a reload spends one small conditional request per
     // file finding out whether it is still good.
     let mut headers = vec![
-        h("Content-Type", mime),
-        h("Accept-Ranges", "bytes"),
-        h("X-Content-Type-Options", "nosniff"),
-        h(
+        hdr("Content-Type", mime),
+        hdr("Accept-Ranges", "bytes"),
+        hdr("X-Content-Type-Options", "nosniff"),
+        hdr(
             "Cache-Control",
             if etag.is_some() { "no-cache" } else { "no-store" },
         ),
     ];
     if let Some(tag) = &etag {
-        headers.push(h("ETag", tag));
+        headers.push(hdr("ETag", tag));
     }
 
     // It asked, and the answer is that nothing has changed. Not for a range
     // request: that client is part-way through a file it already holds, and a
     // 304 answers a question it did not ask.
     if let Some(tag) = &etag
-        && header_value(&rq, "Range").is_none()
-        && header_value(&rq, "If-None-Match").is_some_and(|given| etag_matches(given, tag))
+        && req.header("Range").is_none()
+        && req
+            .header("If-None-Match")
+            .is_some_and(|given| etag_matches(given, tag))
     {
-        let resp = Response::empty(StatusCode(304))
-            .with_header(h("ETag", tag))
-            .with_header(h("Cache-Control", "no-cache"));
-        let _ = rq.respond(resp);
-        return;
+        return Reply::empty(304)
+            .with("ETag", tag)
+            .with("Cache-Control", "no-cache");
     }
     if attachment {
         let safe: String = name.chars().filter(|c| *c != '"' && *c != '\\').collect();
-        headers.push(h(
+        headers.push(hdr(
             "Content-Disposition",
             &format!("attachment; filename=\"{}\"", safe),
         ));
     }
 
-    let range = header_value(&rq, "Range").and_then(|v| parse_range(v, size));
+    let range = req.header("Range").and_then(|v| parse_range(v, size));
     match range {
         Some((start, end)) if start < size && start <= end => {
             if file.seek(SeekFrom::Start(start)).is_err() {
-                let _ =
-                    rq.respond(Response::from_string("io error").with_status_code(StatusCode(500)));
-                return;
+                return Reply::plain(500, "io error");
             }
             let len = end - start + 1;
-            headers.push(h(
+            headers.push(hdr(
                 "Content-Range",
                 &format!("bytes {}-{}/{}", start, end, size),
             ));
-            let resp = Response::new(
-                StatusCode(206),
+            Reply {
+                status: 206,
                 headers,
-                file.take(len),
-                Some(len as usize),
-                None,
-            );
-            let _ = rq.respond(resp);
+                body: Body::Stream {
+                    reader: Box::new(file.take(len)),
+                    len,
+                },
+            }
         }
-        Some(_) => {
-            let resp = Response::from_string("range not satisfiable")
-                .with_status_code(StatusCode(416))
-                .with_header(h("Content-Range", &format!("bytes */{}", size)));
-            let _ = rq.respond(resp);
-        }
-        None => {
-            let resp = Response::new(StatusCode(200), headers, file, Some(size as usize), None);
-            let _ = rq.respond(resp);
-        }
+        Some(_) => Reply::plain(416, "range not satisfiable")
+            .with("Content-Range", &format!("bytes */{}", size)),
+        None => Reply {
+            status: 200,
+            headers,
+            body: Body::Stream {
+                reader: file,
+                len: size,
+            },
+        },
     }
 }
 
