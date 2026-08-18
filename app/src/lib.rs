@@ -204,15 +204,23 @@ fn placeholder_root(app: &AppHandle) -> PathBuf {
         .unwrap_or_else(std::env::temp_dir)
 }
 
-/// Where to open the picker: the newest Recent, if it answers straight away.
+/// Where to open the picker: the newest Recent that names a local path, if it
+/// answers straight away.
 ///
 /// A remembered folder can be on a drive that is not there, and handing the
 /// picker one of those makes the picker do the waiting we just stopped doing.
 /// Half a second on a thread we can walk away from, then the picker decides for
 /// itself. The probe thread may sit there for another twenty seconds; it holds
 /// nothing but a send end nobody is listening to.
+///
+/// A remote id is skipped rather than probed: it is not a path this picker —
+/// the platform's own, browsing the local filesystem — could start in.
 fn picker_start_dir(app: &AppHandle) -> Option<PathBuf> {
-    let last = recent(app).into_iter().next()?;
+    let last = PathBuf::from(
+        recent(app)
+            .into_iter()
+            .find(|id| treeserve::root_id_is_local(id))?,
+    );
     let (tx, rx) = mpsc::channel();
     let probe = last.clone();
     thread::spawn(move || {
@@ -299,7 +307,7 @@ fn cannot_open(dir: &Path, status: RootStatus) -> String {
 /// Points the window at a folder that has been resolved. Main thread only.
 fn serve_root(app: &AppHandle, dir: PathBuf, remember: bool) {
     if remember {
-        remember_root(app, &dir);
+        remember_root_id(app, &treeserve::util::display_path(&dir));
     }
 
     if let Some(serving) = app.try_state::<Serving>() {
@@ -392,7 +400,7 @@ fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
         .map(|(label, dir)| (label, treeserve::util::display_path(&dir)))
         .chain(ext.extra_places.iter().flat_map(|f| f(app)))
         .collect();
-    cfg.set_recent(recent_ids(app));
+    cfg.set_recent(recent(app));
 
     let inner = treeserve::spawn(cfg).map_err(|e| format!("Cannot start the local server: {e}"))?;
     let origin = format!("http://127.0.0.1:{}", inner.addr.port());
@@ -894,73 +902,71 @@ fn recent_file(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_config_dir().ok().map(|d| d.join("recent.txt"))
 }
 
-/// Roots served before, newest first, exactly as recorded.
+/// Roots served before, newest first, as the RootIds the server's lists and
+/// status map speak.
 ///
 /// Nothing here checks that they are still there. It used to, and that was a
 /// blocking stat per entry on the way to the picker: one remembered folder on a
 /// disconnected network drive and the dialog was twenty seconds late, every
 /// launch. `check_roots` finds out afterwards instead, the pane greys out what is
 /// gone, and the file loses it so the next launch never lists it.
-fn recent(app: &AppHandle) -> Vec<PathBuf> {
+fn recent(app: &AppHandle) -> Vec<String> {
     let Some(file) = recent_file(app) else {
         return Vec::new();
     };
     let Ok(text) = fs::read_to_string(file) else {
         return Vec::new();
     };
+    recent_ids(&text)
+}
+
+/// The file's lines as RootIds. A file written before the RootId change holds
+/// the verbatim form (`\\?\C:\…`), which is a spelling of a local path and not
+/// an id, so every line goes through the same normalization a fresh one gets —
+/// otherwise the same folder is two entries and neither matches the status map.
+/// A remote id passes through untouched: `display_path` only strips a prefix
+/// nothing but Windows produces.
+fn recent_ids(text: &str) -> Vec<String> {
     text.lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
-        .map(PathBuf::from)
+        .map(|l| treeserve::util::display_path(Path::new(l)))
         .take(RECENT_MAX)
         .collect()
 }
 
-/// The Recent roots as the RootId strings the server's lists and status map
-/// speak — for a local root, the display-form path.
-fn recent_ids(app: &AppHandle) -> Vec<String> {
-    recent(app)
-        .iter()
-        .map(|p| treeserve::util::display_path(p))
-        .collect()
+/// The Recent list with `id` at the front: an id already in it moves rather
+/// than being added again, and the list keeps its length.
+fn with_front(mut list: Vec<String>, id: &str) -> Vec<String> {
+    list.retain(|x| x != id);
+    list.insert(0, id.to_string());
+    list.truncate(RECENT_MAX);
+    list
 }
 
-/// Moves `root` to the front of the Recent list, on disk and in the running
-/// server so the next page render shows it. Places are deliberately not fed
-/// through here: that list stays fixed.
-fn remember_root(app: &AppHandle, root: &Path) {
-    // Compare in display form: the file's lines are display form, while
-    // `root` is verbatim from `canonicalize` — on Windows those spellings
-    // never match, and a reopened folder would duplicate instead of moving
-    // to the front.
-    let root_id = treeserve::util::display_path(root);
-    let mut list = recent(app);
-    list.retain(|p| treeserve::util::display_path(p) != root_id);
-    list.insert(0, root.to_path_buf());
-    list.truncate(RECENT_MAX);
+/// Moves a RootId to the front of Recent, on disk and in the running server so
+/// the next page render shows it. Places are deliberately not fed through here:
+/// that list stays fixed.
+///
+/// Public: a downstream app that re-roots onto its own backend records the root
+/// the same way local opens are recorded. The id is whatever that backend calls
+/// the root — for a local one, the display-form path.
+pub fn remember_root_id(app: &AppHandle, id: &str) {
+    let list = with_front(recent(app), id);
 
     if let Some(serving) = app.try_state::<Serving>() {
-        serving.inner.state.cfg.set_recent(
-            list.iter().map(|p| treeserve::util::display_path(p)).collect(),
-        );
-        // We got here through `canonicalize`, so this one is known good without
-        // anybody having to look again.
-        serving
-            .inner
-            .state
-            .cfg
-            .set_root_status(treeserve::util::display_path(root), RootStatus::Ok);
+        serving.inner.state.cfg.set_recent(list.clone());
+        // Whoever got this far has already resolved the root, so this one is
+        // known good without anybody having to look again.
+        serving.inner.state.cfg.set_root_status(id.to_string(), RootStatus::Ok);
     }
     let Some(file) = recent_file(app) else { return };
     if let Some(dir) = file.parent() {
         let _ = fs::create_dir_all(dir);
     }
-    // Written in display form — the same string the pane shows and the status
+    // One id per line, which is the same string the pane shows and the status
     // map is keyed by, so the three never disagree about which root is which.
-    let text: String = list
-        .iter()
-        .map(|p| format!("{}\n", treeserve::util::display_path(p)))
-        .collect();
+    let text: String = list.iter().map(|id| format!("{id}\n")).collect();
     let _ = fs::write(file, text);
 }
 
@@ -999,6 +1005,28 @@ mod tests {
         assert!(!origin_allowed(&allowed, &u("http://treessh.localhost.evil.com/x")));
         assert!(!origin_allowed(&allowed, &u("http://evil.com/treessh.localhost")));
         assert!(!origin_allowed(&allowed, &u("https://treessh.localhost/x")));
+    }
+
+    /// What the Recent file holds and what the list speaks are now the same
+    /// thing — RootIds — and the three cases that used to disagree: a reopened
+    /// root moves to the front instead of doubling, a remote id comes back out
+    /// spelled exactly as it went in, and a line written before ids existed
+    /// holds a Windows verbatim path, which is the same root under a spelling
+    /// nothing else in the app uses.
+    #[test]
+    fn recent_is_a_list_of_ids_and_a_reopened_one_moves() {
+        let ids = recent_ids("C:\\Users\\x\r\n\\\\?\\C:\\work\n\n  ssh:prod:/var/www  \n");
+        assert_eq!(ids, [r"C:\Users\x", r"C:\work", "ssh:prod:/var/www"]);
+
+        assert_eq!(
+            with_front(ids.clone(), "ssh:prod:/var/www"),
+            ["ssh:prod:/var/www", r"C:\Users\x", r"C:\work"]
+        );
+        // The verbatim line and the id it normalizes to are one entry, not two.
+        assert_eq!(with_front(ids, r"C:\work").len(), 3);
+
+        let full: Vec<String> = (0..RECENT_MAX).map(|i| format!("/d{i}")).collect();
+        assert_eq!(with_front(full, "/new").len(), RECENT_MAX);
     }
 
     /// The line between "probe it" and "leave it to whoever brought it" is
