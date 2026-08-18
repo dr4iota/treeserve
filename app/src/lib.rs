@@ -12,8 +12,12 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc};
+use std::sync::Arc;
+// Both serve `picker_start_dir`, which is the desktop picker's alone.
+#[cfg(desktop)]
+use std::sync::mpsc;
 use std::thread;
+#[cfg(desktop)]
 use std::time::Duration;
 
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
@@ -154,17 +158,24 @@ pub fn run_with(context: tauri::Context<tauri::Wry>, mut ext: ShellExt) {
         init_script: ext.init_script.unwrap_or_else(|| SHORTCUTS.to_string()),
         allowed_origins: ext.allowed_origins,
     });
-    let mut builder = tauri::Builder::default()
-        // Must be registered first. A second launch re-roots the open window
-        // when it names a directory (Explorer "open with", drag onto the exe).
-        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default();
+    // Must be registered first. A second launch re-roots the open window when it
+    // names a directory (Explorer "open with", drag onto the exe). Desktop only:
+    // a phone has no second process to fold in and no argv to read — the system
+    // delivers a new intent to the activity that is already running.
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             if let Some(dir) = first_dir_arg(argv.into_iter().skip(1)) {
                 open_root(app, dir, true);
             }
             if let Some(w) = app.get_webview_window(WINDOW) {
                 let _ = w.set_focus();
             }
-        }))
+        }));
+    }
+    let mut builder = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init());
     if let Some(f) = configure {
@@ -187,6 +198,7 @@ pub fn run_with(context: tauri::Context<tauri::Wry>, mut ext: ShellExt) {
                 fail(&handle, &e, true);
                 return Ok(());
             }
+            #[cfg(desktop)]
             match first_dir_arg(std::env::args().skip(1)) {
                 // Started from a shell with a path, or via a shell verb.
                 Some(dir) => open_root(&handle, dir, true),
@@ -195,6 +207,16 @@ pub fn run_with(context: tauri::Context<tauri::Wry>, mut ext: ShellExt) {
                 // ask which folder to browse.
                 None => ask_for_folder(handle, true),
             }
+            // Nothing to ask on a phone: there is no argv, and the picker that
+            // would stand in for it needs a per-directory grant this shell does
+            // not request yet. The app's own storage is the one place that is
+            // readable without asking anyone, so that is the root. It starts
+            // empty, which is a true thing to show rather than a failure.
+            #[cfg(mobile)]
+            match app_storage_dir(&handle) {
+                Some(dir) => open_root(&handle, dir, true),
+                None => fail(&handle, "This device gave the app no storage.", true),
+            }
             Ok(())
         })
         .run(context)
@@ -202,6 +224,7 @@ pub fn run_with(context: tauri::Context<tauri::Wry>, mut ext: ShellExt) {
 }
 
 /// First argument that names a readable directory.
+#[cfg(desktop)]
 fn first_dir_arg<I: Iterator<Item = String>>(args: I) -> Option<PathBuf> {
     args.filter(|a| !a.starts_with('-'))
         .map(PathBuf::from)
@@ -229,6 +252,7 @@ fn placeholder_root(app: &AppHandle) -> PathBuf {
 ///
 /// A remote id is skipped rather than probed: it is not a path this picker —
 /// the platform's own, browsing the local filesystem — could start in.
+#[cfg(desktop)]
 fn picker_start_dir(app: &AppHandle) -> Option<PathBuf> {
     let last = PathBuf::from(
         recent(app)
@@ -248,6 +272,7 @@ fn picker_start_dir(app: &AppHandle) -> Option<PathBuf> {
 
 /// Native folder picker. Non-blocking: the blocking variant would deadlock the
 /// event loop when called from `setup` or from a navigation handler.
+#[cfg(desktop)]
 fn ask_for_folder(app: AppHandle, exit_if_cancelled: bool) {
     let mut dialog = app.dialog().file().set_title("Choose a folder to browse");
     if let Some(last) = picker_start_dir(&app) {
@@ -261,6 +286,37 @@ fn ask_for_folder(app: AppHandle, exit_if_cancelled: bool) {
         None if exit_if_cancelled => app.exit(0),
         None => {}
     });
+}
+
+/// There is no folder picker here. Choosing a directory on a phone means a
+/// per-directory grant from the system picker, and this shell does not ask for
+/// one yet — so say so, in the same place the desktop would have put a dialog.
+///
+/// `exit_if_cancelled` keeps the desktop signature so no caller has to know
+/// which platform it is on; here it means "there is no page to say this over",
+/// and the answer is the app's own storage rather than `exit(0)`. A window that
+/// closes itself reads as a crash on a phone.
+#[cfg(mobile)]
+fn ask_for_folder(app: AppHandle, exit_if_cancelled: bool) {
+    if !exit_if_cancelled {
+        fail(&app, "Choosing a folder is not available on this device yet.", false);
+        return;
+    }
+    match app_storage_dir(&app) {
+        Some(dir) => open_root(&app, dir, true),
+        None => fail(&app, "This device gave the app no storage.", true),
+    }
+}
+
+/// The app's own directory: private, always there, and granted by nobody. No
+/// permission prompt, no store review, and it survives everything except an
+/// uninstall. Created on first use, because a root that does not exist cannot
+/// be served and an empty one is the honest starting state.
+#[cfg(mobile)]
+fn app_storage_dir(app: &AppHandle) -> Option<PathBuf> {
+    let dir = app.path().app_data_dir().ok()?;
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
 }
 
 /// Serves `dir`, resolving it off the UI thread.
@@ -835,15 +891,36 @@ fn eval(app: &AppHandle, js: &str) {
 /// having our own means it is in the same place on both.
 fn places(app: &AppHandle) -> Vec<(String, PathBuf)> {
     let p = app.path();
-    let mut out: Vec<(String, PathBuf)> = [
-        ("Home", p.home_dir()),
-        ("Desktop", p.desktop_dir()),
-        ("Documents", p.document_dir()),
-        ("Downloads", p.download_dir()),
-    ]
-    .into_iter()
-    .filter_map(|(label, dir)| dir.ok().filter(|d| d.is_dir()).map(|d| (label.to_string(), d)))
-    .collect();
+    let mut out: Vec<(String, PathBuf)> = Vec::new();
+
+    // First on a phone, because it is the only entry that is certainly readable:
+    // everything below it resolves to a path the system may still refuse.
+    #[cfg(mobile)]
+    if let Some(dir) = app_storage_dir(app) {
+        out.push(("App storage".to_string(), dir));
+    }
+
+    let mut named: Vec<(&str, Option<PathBuf>)> = vec![("Home", p.home_dir().ok())];
+    // No desktop on a device with no desktop — `desktop_dir` is not among the
+    // directories the mobile resolver answers for at all.
+    #[cfg(desktop)]
+    named.push(("Desktop", p.desktop_dir().ok()));
+    named.push(("Documents", p.document_dir().ok()));
+    named.push(("Downloads", p.download_dir().ok()));
+
+    out.extend(named.into_iter().filter_map(|(label, dir)| {
+        let dir = dir?;
+        // Desktop drops what is not there; offering a folder that does not exist
+        // helps nobody. Mobile keeps it: under scoped storage `document_dir()`
+        // names a real place the app may not stat, so probing would hide exactly
+        // the entries a grant is meant to open. Listed, and answered for when it
+        // is clicked — the same trade the drive letters take below.
+        #[cfg(desktop)]
+        if !dir.is_dir() {
+            return None;
+        }
+        Some((label.to_string(), dir))
+    }));
 
     // Which letters exist, asked of the system rather than of the drives. The
     // obvious loop — `is_dir()` on A:\ through Z:\ — puts a `GetFileAttributesW`
@@ -871,7 +948,9 @@ fn places(app: &AppHandle) -> Vec<(String, PathBuf)> {
             }
         }
     }
-    #[cfg(not(windows))]
+    // Not on a phone: `/` is readable enough to list and holds nothing a user
+    // put there, so it offers a tour of the OS in place of their own files.
+    #[cfg(all(not(windows), desktop))]
     out.push(("Filesystem".to_string(), PathBuf::from("/")));
 
     out
