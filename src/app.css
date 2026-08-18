@@ -141,6 +141,14 @@ header {
   .controls a.paneflag { display: none; }
 }
 
+/* The drawer's three parts, all of them nothing at any width where the pane is
+   simply there: the checkbox that holds the state, the button that flips it, and
+   the listing standing in as a second label so a tap outside closes it. The
+   checkbox stays `display: none` even where the drawer works — a label reaches
+   its control whatever the control is doing, which is what makes this the one
+   version of "remember a click" a page with no script in it can have. */
+.drawer-toggle, .drawer-btn, .drawer-scrim { display: none; }
+
 .shell { display: flex; align-items: stretch; flex: 1; min-height: 0; }
 nav.tree {
   flex: 0 0 17rem;
@@ -647,8 +655,56 @@ footer a.pick:hover { border-color: var(--link); background: var(--bg-subtle); t
 @media (max-width: 64rem) {
   nav.tree { flex-basis: 12rem; max-width: 12rem; }
 }
+/* Past this width the pane is gone from the layout — and used to be gone full
+   stop, which on a phone meant the tree, Places, Recent and anything an
+   embedder added were unreachable rather than merely out of the way. So the
+   button appears at exactly the width the pane leaves, and puts it back over
+   the listing instead of beside it.
+   The drawer closes on every navigation, because a new page arrives with a
+   fresh unchecked checkbox in it. That is the behaviour anyway: what you opened
+   the tree for was to go somewhere, and you are now there. */
 @media (max-width: 50rem) {
   nav.tree { display: none; }
+  /* The icon-only pill the header's other controls become at 46rem, taken
+     early: this one has no words to lose, so there is no width at which it
+     would have had any. */
+  .drawer-btn {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.7rem;
+    height: 1.7rem;
+    border: 1px solid var(--border);
+    border-radius: 1rem;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .drawer-btn:hover { color: var(--link); border-color: var(--link); }
+  /* Fixed rather than absolute, so the drawer is the height of the window and
+     not of a listing that may be twenty screens long. `max-width: none` undoes
+     the two rules above that narrow the pane as the window does — in here the
+     width is the window's to divide, and 85vw leaves enough of the listing
+     showing to say that this is over it and closes. */
+  #ts-drawer:checked ~ .shell nav.tree {
+    display: block;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(17rem, 85vw);
+    max-width: none;
+    z-index: 30;
+    overflow-y: auto;
+    box-shadow: 0 0 24px rgba(0, 0, 0, .35);
+  }
+  #ts-drawer:checked ~ .shell .drawer-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 29;
+    background: rgba(0, 0, 0, .35);
+  }
 }
 
 /* Desktop shell: an app layout of exactly one screen, rather than a document
@@ -700,7 +756,8 @@ body.app main { overflow-y: auto; }
     --warning: #9a6700;
     --caution: #cf222e;
   }
-  header, footer, nav.tree, form.filter, .matchnote { display: none; }
+  header, footer, nav.tree, form.filter, .matchnote,
+  .drawer-toggle, .drawer-btn, .drawer-scrim { display: none; }
   body, body.app, body.rawview, body:has(main > .fit) {
     display: block;
     height: auto;

@@ -94,6 +94,14 @@ const ICON_REFRESH: &str =
 /// to survive being 14 pixels wide.
 pub const ICON_PRINT: &str = "<path d=\"M4.8 6.2V2.8h6.4v3.4\"/>\
      <path d=\"M4.8 11.4H2.9V6.2h10.2v5.2h-1.9\"/><path d=\"M4.8 9.4h6.4v3.8H4.8z\"/>";
+/// The drawer button, which is only ever on screen at a width where the pane
+/// is not: three bars, because that is how every narrow window spells the thing
+/// that slides in from the left. Tighter and shorter than the three lines
+/// `icon_lineno` draws for "off", on purpose — that is the other icon in this
+/// header made of horizontal strokes, and at 14 pixels how much of the box they
+/// fill is the whole of the difference between them.
+const ICON_MENU: &str = "<path d=\"M3.6 5h8.8M3.6 8h8.8M3.6 11h8.8\"/>";
+
 /// The way out of a directory, on the `..` row.
 const ICON_UP: &str = "<path d=\"M8 12.8V3.8\"/><path d=\"M4.3 7.5L8 3.8l3.7 3.7\"/>";
 /// The shell's Back button. Drawn like the rest rather than typed as `←`, which
@@ -390,6 +398,31 @@ fn head_and_header(
     } else {
         String::new()
     };
+    // The pane at a width where there is no room for it: the same markup,
+    // slid over the listing by a checkbox nothing but CSS reads. It rides with
+    // the pane rather than with the pages that could have one — with the pane
+    // switched off there is no tree, no Places and no Recent, so a button that
+    // opened a drawer onto them would open a drawer onto nothing.
+    //
+    // The checkbox goes ahead of everything as a sibling of `.shell`, which is
+    // the whole trick: `#ts-drawer:checked ~ .shell nav.tree` is how a page
+    // with no script in it remembers that a button was pressed. The label may
+    // sit anywhere, and does — in the header, where the buttons are.
+    let drawer = show_pane_flag && prefs.sidebar;
+    let drawer_toggle = if drawer {
+        "<input type=\"checkbox\" id=\"ts-drawer\" class=\"drawer-toggle\" aria-hidden=\"true\">\n"
+    } else {
+        ""
+    };
+    let drawer_btn = if drawer {
+        format!(
+            "\n  <label for=\"ts-drawer\" class=\"drawer-btn\" title=\"Tree and places\">{}</label>",
+            svg_icon(ICON_MENU)
+        )
+    } else {
+        String::new()
+    };
+
     let classes = match (state.cfg.app_ui, extra_body_class) {
         (false, "") => String::new(),
         (true, "") => " class=\"app\"".to_string(),
@@ -410,7 +443,7 @@ fn head_and_header(
 {syntax_css}
 </head>
 <body{classes}>
-<header>{back}
+{drawer_toggle}<header>{back}{drawer_btn}
   <div class="crumbs">{crumbs}</div>
   <div class="controls">{controls}</div>
 </header>"#,
@@ -418,7 +451,9 @@ fn head_and_header(
         title = html_escape(&title),
         syntax_css = syntax_css,
         classes = classes,
+        drawer_toggle = drawer_toggle,
         back = back,
+        drawer_btn = drawer_btn,
         crumbs = crumbs,
         controls = controls,
     )
@@ -460,10 +495,19 @@ pub fn layout(
         String::new()
     };
 
+    // What closes the drawer: the listing, made into the label of the same
+    // checkbox for as long as the drawer is over it. Only where the pane is,
+    // since it is only ever the pane it closes.
+    let scrim = if prefs.sidebar {
+        "<label for=\"ts-drawer\" class=\"drawer-scrim\" aria-hidden=\"true\"></label>\n"
+    } else {
+        ""
+    };
+
     format!(
         r#"{chrome}
 <div class="shell">
-{sidebar}
+{scrim}{sidebar}
 <main>
 {content}
 </main>
@@ -483,6 +527,7 @@ pub fn layout(
             true,
             ""
         ),
+        scrim = scrim,
         sidebar = sidebar,
         content = content,
         // The served root gets the same head-and-leaf treatment as a Recent, and
