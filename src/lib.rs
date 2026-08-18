@@ -99,6 +99,42 @@ impl Root {
     }
 }
 
+/// One extra section in the side pane, rendered between Places and Recent.
+///
+/// Everything in it is inert markup: links a shell intercepts, exactly like
+/// Places, and this server has no route that would act on any of them. That is
+/// what makes a section safe to draw — the list is somebody else's to know
+/// about, and drawing it is all this side does. A section with no entries
+/// renders nothing, so a downstream list can start out empty.
+#[derive(Clone)]
+pub struct PaneSection {
+    /// CSS hook on the `<section>`, alongside the built-in `places` and
+    /// `recent`.
+    pub class: String,
+    pub heading: String,
+    /// An action on the heading bar itself — "add a server". Drawn as a plus,
+    /// because a bar that narrow has room for one thing and adding one more of
+    /// what the section lists is that thing: (href, title).
+    pub heading_action: Option<(String, String)>,
+    pub entries: Vec<PaneEntry>,
+}
+
+/// One row of a [`PaneSection`].
+#[derive(Clone)]
+pub struct PaneEntry {
+    /// What to call it. `None` draws the id as a path, the way Recent does.
+    pub label: Option<String>,
+    /// The RootId this row names. Its note comes from [`Config::root_status`],
+    /// like every other entry in the pane.
+    pub id: String,
+    /// Where the row goes: `{action}?path={id}` percent-encoded, the shape
+    /// `/.ts/place` and `/.ts/root` already have.
+    pub action: String,
+    /// Smaller links on the row, shown on hover like the tree's re-root
+    /// button: (href, svg icon paths, title).
+    pub aside: Vec<(String, String, String)>,
+}
+
 pub struct Config {
     /// The served root: its identity and the backend that answers for it.
     /// Behind a lock so an embedder can re-root a running server; the CLI
@@ -131,6 +167,10 @@ pub struct Config {
     /// Recently served roots as RootIds, newest first. Behind a lock like
     /// `root`, since it grows while the server runs.
     recent: RwLock<Arc<Vec<String>>>,
+    /// Extra pane sections from whoever embedded this server. Behind a lock
+    /// for the reason `recent` is: a config UI can add a server while the
+    /// server is running, and the next page render is where that shows up.
+    sections: RwLock<Arc<Vec<PaneSection>>>,
     /// What the Places and Recent paths turned out to be, for the ones anything
     /// has got round to looking at. Written by the embedder as its answers come
     /// in and read while a page renders, which is the whole point of it being
@@ -161,6 +201,7 @@ impl Config {
             app_ui: false,
             places: Vec::new(),
             recent: RwLock::new(Arc::new(Vec::new())),
+            sections: RwLock::new(Arc::new(Vec::new())),
             status: RwLock::new(HashMap::new()),
             token: None,
         }
@@ -191,6 +232,16 @@ impl Config {
     /// it re-roots, so the next page render shows the new order.
     pub fn set_recent(&self, recent: Vec<String>) {
         *self.recent.write().expect("recent lock") = Arc::new(recent);
+    }
+
+    pub fn sections(&self) -> Arc<Vec<PaneSection>> {
+        Arc::clone(&self.sections.read().expect("sections lock"))
+    }
+
+    /// Replaces the extra pane sections. Called by the embedder at start and
+    /// again whenever its own list changes; the next page render shows it.
+    pub fn set_sections(&self, sections: Vec<PaneSection>) {
+        *self.sections.write().expect("sections lock") = Arc::new(sections);
     }
 
     /// What a shortcut turned out to be. `Unknown` for anything nobody has

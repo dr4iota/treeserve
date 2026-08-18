@@ -97,15 +97,25 @@ pub struct ShellExt {
     /// Extra Places entries, appended after the platform's own —
     /// (label, RootId) pairs, like `Config::places`.
     pub extra_places: Vec<Box<dyn Fn(&AppHandle) -> Vec<(String, String)> + Send + Sync>>,
+    /// Whole pane sections of the downstream app's own, drawn between Places
+    /// and Recent. Computed once, when the server starts; for anything later —
+    /// a config UI added a server — call `Config::set_sections` through
+    /// [`Serving::state`] and the next page render has it.
+    ///
+    /// `extra_places` stays for what it is: an entry that belongs *inside* the
+    /// platform's Places list rather than in a list of its own.
+    #[allow(clippy::type_complexity)]
+    pub extra_sections:
+        Vec<Box<dyn Fn(&AppHandle) -> Vec<treeserve::PaneSection> + Send + Sync>>,
     /// Replaces the shell's keyboard-shortcut script wholesale. A downstream
     /// page can need the very keys the default script binds, so the guard
     /// belongs to whoever knows about that page.
     pub init_script: Option<String>,
     /// Origins the window may navigate to besides the local server. An entry
-    /// ending in `:` with no `/` names a scheme (`treessh:`) — custom schemes
+    /// ending in `:` with no `/` names a scheme (`telesight:`) — custom schemes
     /// have opaque origins, so the scheme is the whole identity. Anything
     /// else must equal the URL's serialized origin exactly
-    /// (`http://treessh.localhost`, the form Windows and Android serve custom
+    /// (`http://telesight.localhost`, the form Windows and Android serve custom
     /// protocols on) — equality, not a prefix, so a lookalike host with a
     /// suffix cannot ride the allowlist. Everything not local and not listed
     /// still opens in the user's browser.
@@ -122,6 +132,9 @@ pub struct ShellExt {
 struct Ext {
     actions: Vec<Box<dyn Fn(&AppHandle, &tauri::Url) -> bool + Send + Sync>>,
     extra_places: Vec<Box<dyn Fn(&AppHandle) -> Vec<(String, String)> + Send + Sync>>,
+    #[allow(clippy::type_complexity)]
+    extra_sections:
+        Vec<Box<dyn Fn(&AppHandle) -> Vec<treeserve::PaneSection> + Send + Sync>>,
     init_script: String,
     allowed_origins: Vec<String>,
 }
@@ -137,6 +150,7 @@ pub fn run_with(context: tauri::Context<tauri::Wry>, mut ext: ShellExt) {
     let ext = Arc::new(Ext {
         actions: ext.actions,
         extra_places: ext.extra_places,
+        extra_sections: ext.extra_sections,
         init_script: ext.init_script.unwrap_or_else(|| SHORTCUTS.to_string()),
         allowed_origins: ext.allowed_origins,
     });
@@ -401,6 +415,7 @@ fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
         .chain(ext.extra_places.iter().flat_map(|f| f(app)))
         .collect();
     cfg.set_recent(recent(app));
+    cfg.set_sections(ext.extra_sections.iter().flat_map(|f| f(app)).collect());
 
     let inner = treeserve::spawn(cfg).map_err(|e| format!("Cannot start the local server: {e}"))?;
     let origin = format!("http://127.0.0.1:{}", inner.addr.port());
@@ -1005,18 +1020,18 @@ mod tests {
     }
 
     /// An allowlist that matched by prefix would wave
-    /// `http://treessh.localhost.evil.com` through on the strength of
-    /// `http://treessh.localhost`; equality on the serialized origin (or the
+    /// `http://telesight.localhost.evil.com` through on the strength of
+    /// `http://telesight.localhost`; equality on the serialized origin (or the
     /// whole scheme, for opaque-origin custom protocols) does not.
     #[test]
     fn lookalike_origins_stay_outside() {
-        let allowed = vec!["treessh:".to_string(), "http://treessh.localhost".to_string()];
+        let allowed = vec!["telesight:".to_string(), "http://telesight.localhost".to_string()];
         let u = |s: &str| tauri::Url::parse(s).unwrap();
-        assert!(origin_allowed(&allowed, &u("treessh://term")));
-        assert!(origin_allowed(&allowed, &u("http://treessh.localhost/term.html")));
-        assert!(!origin_allowed(&allowed, &u("http://treessh.localhost.evil.com/x")));
-        assert!(!origin_allowed(&allowed, &u("http://evil.com/treessh.localhost")));
-        assert!(!origin_allowed(&allowed, &u("https://treessh.localhost/x")));
+        assert!(origin_allowed(&allowed, &u("telesight://term")));
+        assert!(origin_allowed(&allowed, &u("http://telesight.localhost/term.html")));
+        assert!(!origin_allowed(&allowed, &u("http://telesight.localhost.evil.com/x")));
+        assert!(!origin_allowed(&allowed, &u("http://evil.com/telesight.localhost")));
+        assert!(!origin_allowed(&allowed, &u("https://telesight.localhost/x")));
     }
 
     /// What the Recent file holds and what the list speaks are now the same

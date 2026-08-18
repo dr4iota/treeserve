@@ -146,6 +146,11 @@ fn icon_pane(on: bool) -> String {
     )
 }
 
+/// The action a pane section's heading can carry. A plus and nothing else: the
+/// bar is .75rem of uppercase and there is room for one mark on the end of it,
+/// so what it draws is the one thing a list of things can be asked for.
+const ICON_PLUS: &str = "<path d=\"M8 3.6v8.8M3.6 8h8.8\"/>";
+
 /// "Serve this folder as the root": an arrow going in through the side of a frame.
 const ICON_AS_ROOT: &str = "<path d=\"M9.8 3.4h2.8v9.2H9.8\"/><path d=\"M3.4 8h5.8\"/>\
      <path d=\"M6.8 5.6L9.2 8l-2.4 2.4\"/>";
@@ -550,9 +555,32 @@ fn pane_html(state: &State, root: &Root, cur: &[String]) -> String {
             state,
             "places",
             "Places",
-            "/.ts/place",
-            state.cfg.places.iter().map(|(l, p)| (Some(l.clone()), p.clone())),
+            None,
+            state.cfg.places.iter().map(|(l, p)| Row {
+                label: Some(l),
+                id: p,
+                action: "/.ts/place",
+                aside: &[],
+            }),
         );
+        // Whatever the embedder brought, between the fixed list and the
+        // remembered one — a list of servers is a Places somebody else knows
+        // the contents of, so it belongs where Places is and not under Recent.
+        for sec in state.cfg.sections().iter() {
+            root_list(
+                &mut out,
+                state,
+                &sec.class,
+                &sec.heading,
+                sec.heading_action.as_ref(),
+                sec.entries.iter().map(|e| Row {
+                    label: e.label.as_deref(),
+                    id: &e.id,
+                    action: &e.action,
+                    aside: &e.aside,
+                }),
+            );
+        }
         // No label, so each of these is drawn as its path: a Place is somewhere
         // with a name, a Recent is just a folder you were in, and which one it
         // was is a question about where it sits.
@@ -561,8 +589,13 @@ fn pane_html(state: &State, root: &Root, cur: &[String]) -> String {
             state,
             "recent",
             "Recent",
-            "/.ts/root",
-            state.cfg.recent().iter().map(|p| (None, p.clone())),
+            None,
+            state.cfg.recent().iter().map(|p| Row {
+                label: None,
+                id: p,
+                action: "/.ts/root",
+                aside: &[],
+            }),
         );
         out.push_str("</div>");
     }
@@ -570,35 +603,70 @@ fn pane_html(state: &State, root: &Root, cur: &[String]) -> String {
     out
 }
 
-/// One pane section of "serve this folder instead" links. `action` is the path
-/// the shell recognises, which is also how it tells a Place from a Recent. An
-/// item with no label is drawn as its path, by `path_label`.
+/// One row of a pane section as the renderer needs it, borrowed from whatever
+/// holds it: a fixed Places pair, a Recent id, or a [`crate::PaneEntry`]. The
+/// `action` rides on the row rather than on the section, because a section the
+/// embedder brought can send each of its entries somewhere of its own.
+struct Row<'a> {
+    label: Option<&'a str>,
+    id: &'a str,
+    action: &'a str,
+    aside: &'a [(String, String, String)],
+}
+
+/// One pane section of "serve this root instead" links. `action` is the path the
+/// shell recognises, which is also how it tells a Place from a Recent. An item
+/// with no label is drawn as its id, by `path_label`.
 ///
 /// An entry whose check has come back badly is greyed and says what happened,
 /// and stays a link: the check is a snapshot from whenever it ran, a drive that
 /// was not ready can be ready now, and the only way to find out is to ask for
 /// it. Clicking one costs whatever the wait costs, which is the same wait the
 /// list used to charge everybody up front.
-fn root_list<I: Iterator<Item = (Option<String>, String)>>(
+fn root_list<'a, I: Iterator<Item = Row<'a>>>(
     out: &mut String,
     state: &State,
     class: &str,
     heading: &str,
-    action: &str,
+    heading_action: Option<&(String, String)>,
     items: I,
 ) {
     let links: String = items
-        .map(|(label, full)| {
-            let note = state.cfg.root_status(&full).note();
-            format!(
-                "<li{}><a href=\"{}?path={}\" title=\"{}\">{}</a>{}</li>",
-                if note.is_some() { " class=\"gone\"" } else { "" },
-                action,
-                percent_encode(&full),
-                html_escape(&full),
-                match &label {
+        .map(|row| {
+            let note = state.cfg.root_status(row.id).note();
+            let link = format!(
+                "<a href=\"{}?path={}\" title=\"{}\">{}</a>",
+                row.action,
+                percent_encode(row.id),
+                html_escape(row.id),
+                match row.label {
                     Some(l) => html_escape(l),
-                    None => path_label(&full),
+                    None => path_label(row.id),
+                }
+            );
+            format!(
+                "<li{}>{}{}</li>",
+                if note.is_some() { " class=\"gone\"" } else { "" },
+                if row.aside.is_empty() {
+                    link
+                } else {
+                    // The tree's row wrapper, for the reason the tree has it:
+                    // the entry and its buttons share a line of their own, so a
+                    // long name ellipsises against the buttons instead of
+                    // pushing them off the pane.
+                    format!(
+                        "<span class=\"row\">{}{}</span>",
+                        link,
+                        row.aside
+                            .iter()
+                            .map(|(href, icon, title)| format!(
+                                "<a class=\"aside\" href=\"{}\" title=\"{}\">{}</a>",
+                                html_escape(href),
+                                html_escape(title),
+                                svg_icon(icon)
+                            ))
+                            .collect::<String>()
+                    )
                 },
                 match note {
                     Some(n) => format!("<span class=\"why\">{n}</span>"),
@@ -611,8 +679,19 @@ fn root_list<I: Iterator<Item = (Option<String>, String)>>(
         return;
     }
     out.push_str(&format!(
-        "<section class=\"{}\"><h2>{}</h2><ul>{}</ul></section>",
-        class, heading, links
+        "<section class=\"{}\"><h2>{}{}</h2><ul>{}</ul></section>",
+        html_escape(class),
+        html_escape(heading),
+        match heading_action {
+            Some((href, title)) => format!(
+                "<a class=\"secact\" href=\"{}\" title=\"{}\">{}</a>",
+                html_escape(href),
+                html_escape(title),
+                svg_icon(ICON_PLUS)
+            ),
+            None => String::new(),
+        },
+        links
     ));
 }
 
@@ -969,7 +1048,7 @@ pub fn error_page(
 mod tests {
     use super::*;
     use crate::hl::Hl;
-    use crate::Config;
+    use crate::{Config, PaneEntry, PaneSection, RootStatus};
     use std::fs;
     use std::path::PathBuf;
 
@@ -999,6 +1078,82 @@ mod tests {
         ));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// A section the embedder brought is drawn where Places and Recent are
+    /// drawn, out of the same parts: an entry that links somewhere the shell
+    /// knows, a note when its check came back badly, and — this being the part
+    /// Places has no use for — buttons of its own on the row and one on the
+    /// heading. And it is shell-only furniture, so a browser gets none of it.
+    #[test]
+    fn a_pane_section_is_drawn_like_places_with_buttons() {
+        let dir = tmp_dir("sections");
+        let mut state = state_at(dir.clone());
+        let id = "ssh:prod-web:/var/www";
+        state.cfg.set_sections(vec![PaneSection {
+            class: "servers".to_string(),
+            heading: "Servers".to_string(),
+            heading_action: Some(("/x/add".to_string(), "Add a server".to_string())),
+            entries: vec![PaneEntry {
+                label: Some("prod-web".to_string()),
+                id: id.to_string(),
+                action: "/x/open".to_string(),
+                aside: vec![(
+                    "/x/edit?id=prod-web".to_string(),
+                    ICON_PLUS.to_string(),
+                    "Edit prod-web".to_string(),
+                )],
+            }],
+        }]);
+        state.cfg.set_root_status(id.to_string(), RootStatus::Missing);
+        // The pane is what the section is in, and the test helper has it off.
+        let prefs = Prefs { sidebar: true, ..prefs() };
+
+        let page = |state: &State| {
+            let root = state.cfg.root();
+            listing_page(state, &root, prefs, &[], &VfsPath::root(), &[], "/")
+        };
+
+        // Nothing outside the shell, whatever the section says.
+        let browser = page(&state);
+        assert!(!browser.contains("servers"), "{browser}");
+
+        state.cfg.app_ui = true;
+        let html = page(&state);
+        assert!(
+            html.contains("<section class=\"servers\"><h2>Servers<a class=\"secact\" \
+                 href=\"/x/add\" title=\"Add a server\">"),
+            "{html}"
+        );
+        assert!(
+            html.contains(
+                "<li class=\"gone\"><span class=\"row\"><a href=\"/x/open?path=\
+                 ssh%3Aprod-web%3A%2Fvar%2Fwww\" title=\"ssh:prod-web:/var/www\">prod-web</a>"
+            ),
+            "{html}"
+        );
+        assert!(
+            html.contains("<a class=\"aside\" href=\"/x/edit?id=prod-web\" title=\"Edit prod-web\">"),
+            "{html}"
+        );
+        assert!(html.contains("<span class=\"why\">missing</span>"), "{html}");
+        // Between the fixed list and the remembered one, not after both.
+        state.cfg.places = vec![("Home".to_string(), "/home/x".to_string())];
+        state.cfg.set_recent(vec!["/tmp".to_string()]);
+        let ordered = page(&state);
+        let at = |needle: &str| ordered.find(needle).unwrap_or_else(|| panic!("{ordered}"));
+        assert!(at("\"places\"") < at("\"servers\"") && at("\"servers\"") < at("\"recent\""));
+
+        // And a section that has nothing in it yet says nothing.
+        state.cfg.set_sections(vec![PaneSection {
+            class: "servers".to_string(),
+            heading: "Servers".to_string(),
+            heading_action: None,
+            entries: Vec::new(),
+        }]);
+        let empty = page(&state);
+        let _ = fs::remove_dir_all(&dir);
+        assert!(!empty.contains("servers"), "{empty}");
     }
 
     #[test]

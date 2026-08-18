@@ -167,6 +167,22 @@ nav.tree section h2 {
   margin: .5rem -.5rem .35rem;
   padding: .25rem .6rem;
 }
+/* A section the embedder brought can hang one action off its heading — "add a
+   server". The bar becomes a line with two ends only when there is something to
+   put on the far one, so Places and Recent are set exactly as they were before
+   this existed; `:has` is what says that, and the sheet already leans on it. */
+nav.tree section h2:has(a.secact) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+nav.tree section h2 a.secact {
+  padding: 0 .1rem;
+  line-height: 1;
+  color: var(--muted);
+  opacity: .6;
+}
+nav.tree section h2 a.secact:hover { color: var(--link); opacity: 1; background: none; }
 nav.tree section ul { padding-left: .2rem; }
 /* Places, Recent and the picker follow the tree in one scroll, rather than
    holding a strip of the pane the tree could have used. On a tree of any size
@@ -294,11 +310,31 @@ nav.tree .chooser li.gone {
    characters and pushed its own word onto a second line. Nothing needs to wrap
    now: both halves of the path can ellipsise, so there is no width at which this
    does not fit. */
-nav.tree .chooser li.gone > a {
+nav.tree .chooser li.gone > a,
+nav.tree .chooser li.gone > .row > a {
   flex: 1 1 auto;
   min-width: 0;
   color: var(--muted);
 }
+/* An entry that brought smaller links of its own — an "edit this server"
+   button beside the row that opens it. Same bargain the tree's re-root button
+   struck: the entry takes the width and gives it back with an ellipsis, the
+   buttons keep theirs, and they stay quiet until the row is under the pointer,
+   because the space is reserved either way and a column of bright marks down a
+   narrow pane is a column of marks, not a list. */
+nav.tree .chooser .row > a { flex: 1 1 auto; min-width: 0; }
+/* A gone entry's `li` is the flex line that its note sits at the end of, so
+   when the row is what holds the link, the row is what gives up the width. */
+nav.tree .chooser li.gone > .row { flex: 1 1 auto; min-width: 0; }
+nav.tree .chooser a.aside {
+  flex: 0 0 auto;
+  padding: 0 .15rem;
+  line-height: 1;
+  color: var(--muted);
+  opacity: .4;
+}
+nav.tree .chooser .row:hover a.aside { opacity: 1; }
+nav.tree .chooser a.aside:hover { color: var(--link); background: none; }
 nav.tree .chooser .why {
   flex: 0 0 auto;
   margin-left: auto;
