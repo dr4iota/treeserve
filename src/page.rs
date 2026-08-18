@@ -1,10 +1,9 @@
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::SystemTime;
-
 use crate::md::render_markdown;
 use crate::util::*;
-use crate::State;
+use crate::vfs::{Vfs, VfsPath};
+use crate::{Root, State};
+
+pub use crate::vfs::Entry;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum ThemeMode {
@@ -45,31 +44,10 @@ pub struct Prefs {
     pub sidebar: bool,
 }
 
-pub struct Entry {
-    pub name: String,
-    pub is_dir: bool,
-    pub size: u64,
-    pub mtime: Option<SystemTime>,
-}
-
-pub fn read_dir_sorted(state: &State, abs: &Path) -> Vec<Entry> {
-    let mut out = Vec::new();
-    let Ok(rd) = fs::read_dir(abs) else {
-        return out;
-    };
-    for de in rd.flatten() {
-        let name = de.file_name().to_string_lossy().into_owned();
-        if !state.cfg.show_hidden && name.starts_with('.') {
-            continue;
-        }
-        let meta = de.metadata().ok();
-        let is_dir = de.path().is_dir(); // follows symlinks
-        out.push(Entry {
-            name,
-            is_dir,
-            size: meta.as_ref().map(|m| m.len()).unwrap_or(0),
-            mtime: meta.and_then(|m| m.modified().ok()),
-        });
+pub fn read_dir_sorted(state: &State, vfs: &dyn Vfs, path: &VfsPath) -> Vec<Entry> {
+    let mut out = vfs.read_dir(path).unwrap_or_default();
+    if !state.cfg.show_hidden {
+        out.retain(|e| !e.name.starts_with('.'));
     }
     out.sort_by(|a, b| {
         b.is_dir
@@ -261,6 +239,7 @@ pub(crate) fn flag(class: &str, href: &str, icon: &str, label: &str, title: &str
 #[allow(clippy::too_many_arguments)]
 fn head_and_header(
     state: &State,
+    root: &Root,
     prefs: Prefs,
     rel: &[String],
     url_now: &str,
@@ -269,7 +248,7 @@ fn head_and_header(
     show_pane_flag: bool,
     extra_body_class: &str,
 ) -> String {
-    let site_title = state.cfg.title();
+    let site_title = state.cfg.title_for(root);
     let title = if rel.is_empty() {
         site_title.clone()
     } else {
@@ -444,6 +423,7 @@ fn head_and_header(
 /// (still percent-encoded) path+query of this request, used for toggles.
 pub fn layout(
     state: &State,
+    root: &Root,
     prefs: Prefs,
     rel: &[String],
     url_now: &str,
@@ -470,7 +450,7 @@ pub fn layout(
     // is the honest trade for a full-width listing — the picker they are
     // shortcuts to is in the status line, and that line is always on screen.
     let sidebar = if prefs.sidebar {
-        pane_html(state, rel)
+        pane_html(state, root, rel)
     } else {
         String::new()
     };
@@ -489,6 +469,7 @@ pub fn layout(
 "#,
         chrome = head_and_header(
             state,
+            root,
             prefs,
             rel,
             url_now,
@@ -506,10 +487,10 @@ pub fn layout(
         footer = format!(
             "<span class=\"where\" title=\"{0}\"><span class=\"app\">{1} v{2} &middot;</span>{3}</span>\
              {4}",
-            html_escape(&display_path(&state.cfg.root())),
+            html_escape(&root.id),
             env!("CARGO_PKG_NAME"),
             env!("CARGO_PKG_VERSION"),
-            path_label(&display_path(&state.cfg.root())),
+            path_label(&root.id),
             pick
         ),
     )
@@ -522,6 +503,7 @@ pub fn layout(
 /// that knows what they should be.
 pub fn bare_layout(
     state: &State,
+    root: &Root,
     prefs: Prefs,
     rel: &[String],
     url_now: &str,
@@ -532,6 +514,7 @@ pub fn bare_layout(
         "{chrome}\n{content}\n</body>\n</html>\n",
         chrome = head_and_header(
             state,
+            root,
             prefs,
             rel,
             url_now,
@@ -551,12 +534,12 @@ const TREE_MAX_PER_DIR: usize = 150;
 ///
 /// Only called when the pane is on, and then it always has its tree — the flag
 /// in the header is the pane itself, all of it or none.
-fn pane_html(state: &State, cur: &[String]) -> String {
+fn pane_html(state: &State, root: &Root, cur: &[String]) -> String {
     let mut out = String::from("<nav class=\"tree\">");
     // The tree first and foremost: it is what the pane is for, and it is what
     // grows, so it takes the height and the shortcuts below settle for what is
     // left.
-    tree_dir(state, &state.cfg.root(), &mut Vec::new(), cur, &mut out);
+    tree_dir(state, root.vfs.as_ref(), &mut Vec::new(), cur, &mut out);
     if state.cfg.app_ui {
         out.push_str("<div class=\"chooser\">");
         // Two paths on purpose: opening a Place is not something Recent should
@@ -596,7 +579,7 @@ fn pane_html(state: &State, cur: &[String]) -> String {
 /// was not ready can be ready now, and the only way to find out is to ask for
 /// it. Clicking one costs whatever the wait costs, which is the same wait the
 /// list used to charge everybody up front.
-fn root_list<I: Iterator<Item = (Option<String>, PathBuf)>>(
+fn root_list<I: Iterator<Item = (Option<String>, String)>>(
     out: &mut String,
     state: &State,
     class: &str,
@@ -605,9 +588,8 @@ fn root_list<I: Iterator<Item = (Option<String>, PathBuf)>>(
     items: I,
 ) {
     let links: String = items
-        .map(|(label, path)| {
-            let full = display_path(&path);
-            let note = state.cfg.root_status(&path).note();
+        .map(|(label, full)| {
+            let note = state.cfg.root_status(&full).note();
             format!(
                 "<li{}><a href=\"{}?path={}\" title=\"{}\">{}</a>{}</li>",
                 if note.is_some() { " class=\"gone\"" } else { "" },
@@ -677,11 +659,11 @@ fn path_label(full: &str) -> String {
 ///
 /// Only in the shell. Nothing else can act on it: the server has no such route,
 /// and a page served over a network has no business offering one.
-fn as_root_link(state: &State, abs: &Path) -> String {
+fn as_root_link(state: &State, vfs: &dyn Vfs, path: &VfsPath) -> String {
     if !state.cfg.app_ui {
         return String::new();
     }
-    let full = display_path(abs);
+    let full = vfs.root_id_at(path);
     format!(
         "<a class=\"asroot\" href=\"/.ts/root?path={}\" title=\"Serve {} as the root\">{}</a>",
         percent_encode(&full),
@@ -690,8 +672,8 @@ fn as_root_link(state: &State, abs: &Path) -> String {
     )
 }
 
-fn tree_dir(state: &State, abs: &Path, rel: &mut Vec<String>, cur: &[String], out: &mut String) {
-    let entries = read_dir_sorted(state, abs);
+fn tree_dir(state: &State, vfs: &dyn Vfs, rel: &mut Vec<String>, cur: &[String], out: &mut String) {
+    let entries = read_dir_sorted(state, vfs, &VfsPath::new(rel.clone()));
     let total = entries.len();
     out.push_str("<ul>");
     for e in entries.into_iter().take(TREE_MAX_PER_DIR) {
@@ -702,7 +684,7 @@ fn tree_dir(state: &State, abs: &Path, rel: &mut Vec<String>, cur: &[String], ou
         let cls = if is_cur { " class=\"cur\"" } else { "" };
         if e.is_dir {
             let arrow = if on_path { "&#x25BE;" } else { "&#x25B8;" };
-            let child_abs = abs.join(&e.name);
+            let child = VfsPath::new(rel.clone());
             // The name and the button share a row of their own, so an expanded
             // directory's children hang below it rather than beside the button,
             // and a long name ellipsises against the button instead of pushing it
@@ -713,10 +695,10 @@ fn tree_dir(state: &State, abs: &Path, rel: &mut Vec<String>, cur: &[String], ou
                 html_escape(&href),
                 arrow,
                 html_escape(&e.name),
-                as_root_link(state, &child_abs)
+                as_root_link(state, vfs, &child)
             ));
             if on_path {
-                tree_dir(state, &child_abs, rel, cur, out);
+                tree_dir(state, vfs, rel, cur, out);
             }
             out.push_str("</li>");
         } else {
@@ -744,12 +726,14 @@ const SEARCH_MAX_DEPTH: usize = 12;
 
 pub fn listing_page(
     state: &State,
+    root: &Root,
     prefs: Prefs,
     rel: &[String],
-    abs: &Path,
+    canon: &VfsPath,
     query: &[(String, String)],
     url_now: &str,
 ) -> String {
+    let vfs = root.vfs.as_ref();
     let q = query_get(query, "q").unwrap_or("");
     let recursive = query_get(query, "r") == Some("1");
 
@@ -773,29 +757,29 @@ pub fn listing_page(
     );
 
     if q.is_empty() {
-        content.push_str(&entries_table(state, rel, abs));
-        content.push_str(&listing_readme(state, abs));
+        content.push_str(&entries_table(state, vfs, rel, canon));
+        content.push_str(&listing_readme(state, vfs, canon));
     } else {
-        content.push_str(&search_results(state, rel, abs, q, recursive));
+        content.push_str(&search_results(state, vfs, rel, canon, q, recursive));
     }
 
-    layout(state, prefs, rel, url_now, "", false, &content)
+    layout(state, root, prefs, rel, url_now, "", false, &content)
 }
 
 const README_NAMES: &[&str] = &["README.md", "README.markdown", "README.mdown", "README.mkd"];
 
 /// GitHub-style README under an unfiltered listing. Missing, huge, or binary
 /// files are skipped so the table still stands on its own.
-fn listing_readme(state: &State, abs: &Path) -> String {
+fn listing_readme(state: &State, vfs: &dyn Vfs, dir: &VfsPath) -> String {
     for name in README_NAMES {
-        let path = abs.join(name);
-        let Ok(meta) = fs::metadata(&path) else {
+        let path = dir.join(name);
+        let Ok(meta) = vfs.metadata(&path) else {
             continue;
         };
-        if !meta.is_file() || meta.len() > MAX_HIGHLIGHT_BYTES {
+        if !meta.is_file || meta.len > MAX_HIGHLIGHT_BYTES {
             continue;
         }
-        let Ok(bytes) = fs::read(&path) else {
+        let Ok(bytes) = vfs.read(&path) else {
             continue;
         };
         if looks_binary(&bytes[..bytes.len().min(8192)]) {
@@ -810,8 +794,8 @@ fn listing_readme(state: &State, abs: &Path) -> String {
     String::new()
 }
 
-fn entries_table(state: &State, rel: &[String], abs: &Path) -> String {
-    let entries = read_dir_sorted(state, abs);
+fn entries_table(state: &State, vfs: &dyn Vfs, rel: &[String], canon: &VfsPath) -> String {
+    let entries = read_dir_sorted(state, vfs, canon);
     let mut rows = String::new();
     if !rel.is_empty() {
         let parent = &rel[..rel.len() - 1];
@@ -853,7 +837,14 @@ fn entries_table(state: &State, rel: &[String], abs: &Path) -> String {
     )
 }
 
-fn search_results(state: &State, rel: &[String], abs: &Path, pat: &str, recursive: bool) -> String {
+fn search_results(
+    state: &State,
+    vfs: &dyn Vfs,
+    rel: &[String],
+    canon: &VfsPath,
+    pat: &str,
+    recursive: bool,
+) -> String {
     // Pattern containing '/' matches the path relative to this directory;
     // otherwise it matches the file name only.
     let match_path = pat.contains('/');
@@ -862,9 +853,9 @@ fn search_results(state: &State, rel: &[String], abs: &Path, pat: &str, recursiv
     let mut truncated = false;
 
     // DFS; non-recursive mode just doesn't descend.
-    let mut stack: Vec<(PathBuf, Vec<String>)> = vec![(abs.to_path_buf(), Vec::new())];
+    let mut stack: Vec<(VfsPath, Vec<String>)> = vec![(canon.clone(), Vec::new())];
     while let Some((dir, drel)) = stack.pop() {
-        for e in read_dir_sorted(state, &dir) {
+        for e in read_dir_sorted(state, vfs, &dir) {
             scanned += 1;
             if scanned > SEARCH_MAX_SCANNED || results.len() >= SEARCH_MAX_RESULTS {
                 truncated = true;
@@ -928,9 +919,9 @@ fn search_results(state: &State, rel: &[String], abs: &Path, pat: &str, recursiv
 }
 
 /// Plain-text listing for non-browser clients (curl, scripts).
-pub fn listing_text(state: &State, abs: &Path) -> String {
+pub fn listing_text(state: &State, vfs: &dyn Vfs, path: &VfsPath) -> String {
     let mut out = String::new();
-    for e in read_dir_sorted(state, abs) {
+    for e in read_dir_sorted(state, vfs, path) {
         out.push_str(&e.name);
         if e.is_dir {
             out.push('/');
@@ -947,23 +938,31 @@ pub fn listing_text(state: &State, abs: &Path) -> String {
 /// shell does it on a thread and parks the window here meanwhile. Still the served
 /// root's page furniture, because that is still what is being served: only the
 /// middle of the window is waiting.
-pub fn wait_page(state: &State, prefs: Prefs, url_now: &str, path: &str) -> String {
+pub fn wait_page(state: &State, root: &Root, prefs: Prefs, url_now: &str, path: &str) -> String {
     let content = format!(
         "<div class=\"bigmsg\"><p>Opening {}&hellip;</p>\
          <p>If the folder is on a drive or a share that is not answering, this waits \
          for as long as that takes to find out.</p></div>",
         html_escape(path)
     );
-    layout(state, prefs, &[], url_now, "", false, &content)
+    layout(state, root, prefs, &[], url_now, "", false, &content)
 }
 
-pub fn error_page(state: &State, prefs: Prefs, rel: &[String], url_now: &str, code: u32, msg: &str) -> String {
+pub fn error_page(
+    state: &State,
+    root: &Root,
+    prefs: Prefs,
+    rel: &[String],
+    url_now: &str,
+    code: u32,
+    msg: &str,
+) -> String {
     let content = format!(
         "<div class=\"bigmsg\"><h2>{}</h2><p>{}</p><p><a href=\"/\">Back to root</a></p></div>",
         code,
         html_escape(msg)
     );
-    layout(state, prefs, rel, url_now, "", false, &content)
+    layout(state, root, prefs, rel, url_now, "", false, &content)
 }
 
 #[cfg(test)]
@@ -1008,7 +1007,8 @@ mod tests {
         fs::write(dir.join("README.md"), "# Hello listing\n\nA note.\n").unwrap();
         fs::write(dir.join("a.rs"), "fn main() {}\n").unwrap();
         let state = state_at(dir.clone());
-        let html = listing_page(&state, prefs(), &[], &dir, &[], "/");
+        let root = state.cfg.root();
+        let html = listing_page(&state, &root, prefs(), &[], &VfsPath::root(), &[], "/");
         let _ = fs::remove_dir_all(&dir);
         assert!(html.contains("listing-readme"), "{html}");
         assert!(html.contains("Hello listing"), "{html}");
@@ -1020,11 +1020,13 @@ mod tests {
         let dir = tmp_dir("readme-q");
         fs::write(dir.join("README.md"), "# Should not appear\n").unwrap();
         let state = state_at(dir.clone());
+        let root = state.cfg.root();
         let html = listing_page(
             &state,
+            &root,
             prefs(),
             &[],
-            &dir,
+            &VfsPath::root(),
             &[("q".into(), "*.rs".into())],
             "/?q=*.rs",
         );

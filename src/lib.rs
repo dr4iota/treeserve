@@ -7,14 +7,14 @@ pub mod hl;
 pub mod md;
 pub mod page;
 pub mod util;
+pub mod vfs;
 pub mod view;
 
 use std::collections::HashMap;
-use std::fs::{File, Metadata};
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::net::SocketAddr;
 use std::panic::{self, AssertUnwindSafe};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::UNIX_EPOCH;
@@ -25,6 +25,7 @@ use two_face::theme::EmbeddedThemeName;
 use hl::Hl;
 use page::{Prefs, ThemeMode};
 use util::*;
+pub use vfs::{Entry, LocalFs, Meta, ReadSeek, ResolveError, Vfs, VfsPath};
 
 /// glibc keeps giving the single-precision math functions new symbol versions
 /// — `hypotf` in 2.35, `atan2f` in 2.43 — so a binary built on a host that has
@@ -77,10 +78,32 @@ impl RootStatus {
     }
 }
 
+/// The served root: a RootId naming it, and the backend that answers for it.
+///
+/// A RootId is a scheme-aware string. A local root's id is the bare
+/// display-form host path — exactly the string `recent.txt`, the Places list
+/// and the `/.ts/root` links have always carried — and a remote backend's id
+/// carries a scheme prefix (`ssh:<bookmark>:/path`). A single-letter prefix
+/// is a Windows drive letter, not a scheme.
+pub struct Root {
+    pub id: String,
+    pub vfs: Arc<dyn Vfs>,
+}
+
+impl Root {
+    /// A root on the local filesystem. The path should already be
+    /// canonicalized, as every caller of [`Config::new`] has always done.
+    pub fn local(root: PathBuf) -> Root {
+        let vfs = Arc::new(LocalFs::new(root));
+        Root { id: vfs.root_id(), vfs }
+    }
+}
+
 pub struct Config {
-    /// Canonicalized served root. Behind a lock so an embedder can re-root a
-    /// running server; the CLI never changes it.
-    root: RwLock<Arc<PathBuf>>,
+    /// The served root: its identity and the backend that answers for it.
+    /// Behind a lock so an embedder can re-root a running server; the CLI
+    /// never changes it.
+    root: RwLock<Arc<Root>>,
     /// Site title. `None` means "name of the served directory", which follows
     /// the root when it changes.
     title: Option<String>,
@@ -101,18 +124,18 @@ pub struct Config {
     /// controls do nothing on their own: they are links the shell intercepts,
     /// and this server has no route that would act on them.
     pub app_ui: bool,
-    /// Fixed shortcuts for the Places list — (label, path) pairs the embedder
-    /// supplies, since it is the side that knows the platform's home, desktop
-    /// and drive layout. Only rendered when `app_ui` is set.
-    pub places: Vec<(String, PathBuf)>,
-    /// Recently served roots, newest first. Behind a lock like `root`, since it
-    /// grows while the server runs.
-    recent: RwLock<Arc<Vec<PathBuf>>>,
+    /// Fixed shortcuts for the Places list — (label, RootId) pairs the
+    /// embedder supplies, since it is the side that knows the platform's
+    /// home, desktop and drive layout. Only rendered when `app_ui` is set.
+    pub places: Vec<(String, String)>,
+    /// Recently served roots as RootIds, newest first. Behind a lock like
+    /// `root`, since it grows while the server runs.
+    recent: RwLock<Arc<Vec<String>>>,
     /// What the Places and Recent paths turned out to be, for the ones anything
     /// has got round to looking at. Written by the embedder as its answers come
     /// in and read while a page renders, which is the whole point of it being
     /// separate from the two lists: they go out immediately and this catches up.
-    status: RwLock<HashMap<PathBuf, RootStatus>>,
+    status: RwLock<HashMap<String, RootStatus>>,
     /// When set, requests must carry a matching `ts_token` cookie, obtained by
     /// visiting `/.ts/auth?t=<token>&back=<path>`. Used by the desktop app,
     /// where the loopback port would otherwise be open to any local process.
@@ -124,7 +147,7 @@ impl Config {
     /// Config with library defaults, matching the CLI's own defaults.
     pub fn new(root: PathBuf) -> Config {
         Config {
-            root: RwLock::new(Arc::new(root)),
+            root: RwLock::new(Arc::new(Root::local(root))),
             title: None,
             bind: "127.0.0.1".to_string(),
             port: 8080,
@@ -143,32 +166,40 @@ impl Config {
         }
     }
 
-    pub fn root(&self) -> Arc<PathBuf> {
+    pub fn root(&self) -> Arc<Root> {
         Arc::clone(&self.root.read().expect("root lock"))
     }
 
-    /// Re-roots a running server. The path should already be canonicalized.
+    /// Re-roots a running server onto a local directory. The path should
+    /// already be canonicalized.
     pub fn set_root(&self, root: PathBuf) {
+        self.set_root_vfs(Root::local(root));
+    }
+
+    /// Re-roots a running server onto any backend. Id and backend travel
+    /// together, atomically — a page renders one root or the other, never a
+    /// title from one and a tree from another.
+    pub fn set_root_vfs(&self, root: Root) {
         *self.root.write().expect("root lock") = Arc::new(root);
     }
 
-    pub fn recent(&self) -> Arc<Vec<PathBuf>> {
+    pub fn recent(&self) -> Arc<Vec<String>> {
         Arc::clone(&self.recent.read().expect("recent lock"))
     }
 
     /// Replaces the Recent list, newest first. Called by the embedder whenever
     /// it re-roots, so the next page render shows the new order.
-    pub fn set_recent(&self, recent: Vec<PathBuf>) {
+    pub fn set_recent(&self, recent: Vec<String>) {
         *self.recent.write().expect("recent lock") = Arc::new(recent);
     }
 
     /// What a shortcut turned out to be. `Unknown` for anything nobody has
     /// looked at, which a page renders as an ordinary entry.
-    pub fn root_status(&self, path: &Path) -> RootStatus {
+    pub fn root_status(&self, id: &str) -> RootStatus {
         self.status
             .read()
             .expect("status lock")
-            .get(path)
+            .get(id)
             .copied()
             .unwrap_or(RootStatus::Unknown)
     }
@@ -176,22 +207,26 @@ impl Config {
     /// Records what a shortcut turned out to be. Every page rendered after this
     /// shows it; the one already on screen was static when it left and stays
     /// that way, which is the trade for having no script in it.
-    pub fn set_root_status(&self, path: PathBuf, status: RootStatus) {
-        self.status.write().expect("status lock").insert(path, status);
+    pub fn set_root_status(&self, id: String, status: RootStatus) {
+        self.status.write().expect("status lock").insert(id, status);
     }
 
     pub fn title(&self) -> String {
+        self.title_for(&self.root())
+    }
+
+    /// The site title for a root the caller already holds — so one request
+    /// renders one root everywhere, instead of re-reading the lock and
+    /// racing a re-root between its own header and its own pane.
+    pub fn title_for(&self, root: &Root) -> String {
         match &self.title {
             Some(t) => t.clone(),
-            None => {
-                let root = self.root();
-                match root.file_name() {
-                    Some(n) => n.to_string_lossy().into_owned(),
-                    // A drive, a share or `/` has no last component to show, so
-                    // name it by the whole path rather than by nothing.
-                    None => display_path(&root),
-                }
-            }
+            None => match leaf_of(&root.id) {
+                Some(n) => n.to_string(),
+                // A drive, a share or `/` has no last component to show, so
+                // name it by the whole id rather than by nothing.
+                None => root.id.clone(),
+            },
         }
     }
 
@@ -209,12 +244,58 @@ pub struct State {
     pub hl: Hl,
 }
 
+/// Last path component of a RootId, `None` when there is none to take — a
+/// filesystem root, a bare drive, a UNC share root. Mirrors what
+/// `Path::file_name` answered when the id was a `PathBuf`, and answers for
+/// remote ids too (`ssh:x:/var/www` → `www`). Public so an embedder titles
+/// its window by the same rule a page titles itself.
+pub fn leaf_of(id: &str) -> Option<&str> {
+    // Separators are the host's. A Unix file may legally carry `\` in its
+    // name, so only Windows splits on it — which is also what `Path` did.
+    #[cfg(windows)]
+    const SEPS: &[char] = &['/', '\\'];
+    #[cfg(not(windows))]
+    const SEPS: &[char] = &['/'];
+    // A UNC share root (`\\server\share`) has no component below the root,
+    // like `/` and `C:\`, even though it has separators to find.
+    #[cfg(windows)]
+    if let Some(rest) = id.strip_prefix(r"\\") {
+        if rest.matches(SEPS).count() <= 1 {
+            return None;
+        }
+    }
+    match id.rfind(SEPS) {
+        Some(i) if i + 1 < id.len() => Some(&id[i + 1..]),
+        Some(_) => None,
+        None if id.is_empty() => None,
+        None => Some(id),
+    }
+}
+
+/// Whether a RootId names a local path — something `PathBuf` and `fs` can be
+/// pointed at. A scheme prefix marks a remote id: at least two characters,
+/// leading letter, then letters, digits, `+`, `.` or `-` (the URI scheme
+/// grammar, so `s3:` counts). A single letter before `:` is a Windows drive.
+pub fn root_id_is_local(id: &str) -> bool {
+    match id.find(':') {
+        Some(i) if i >= 2 => {
+            let scheme = &id[..i];
+            !(scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+                && scheme
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-')))
+        }
+        _ => true,
+    }
+}
+
 /// Where a URL path points inside the served root.
 pub struct Resolved {
     /// Percent-decoded path segments, for breadcrumbs and file names.
     pub rel: Vec<String>,
-    /// Canonical filesystem path.
-    pub abs: PathBuf,
+    /// Canonical path inside the root's backend: symlinks resolved,
+    /// confinement checked.
+    pub path: VfsPath,
 }
 
 /// Why a URL path does not name something servable. The segments are carried
@@ -231,7 +312,7 @@ pub enum PathError {
 /// Shared by the request handler and by embedders that need the file behind a
 /// link (the desktop app's download handler), so the traversal and
 /// symlink-escape checks live in exactly one place.
-pub fn resolve_in_root(root: &Path, url_path: &str) -> Result<Resolved, PathError> {
+pub fn resolve_in_root(vfs: &dyn Vfs, url_path: &str) -> Result<Resolved, PathError> {
     let decoded = percent_decode(url_path);
     let rel: Vec<String> = decoded
         .split('/')
@@ -242,19 +323,11 @@ pub fn resolve_in_root(root: &Path, url_path: &str) -> Result<Resolved, PathErro
         return Err(PathError::Bad);
     }
 
-    let mut abs = root.to_path_buf();
-    for seg in &rel {
-        abs.push(seg);
+    match vfs.resolve(&VfsPath::new(rel.clone())) {
+        Ok(path) => Ok(Resolved { rel, path }),
+        Err(ResolveError::Missing) => Err(PathError::Missing(rel)),
+        Err(ResolveError::Outside) => Err(PathError::Outside(rel)),
     }
-    // canonicalize resolves symlinks; the prefix check keeps everything
-    // inside the served root.
-    let Ok(abs) = abs.canonicalize() else {
-        return Err(PathError::Missing(rel));
-    };
-    if !abs.starts_with(root) {
-        return Err(PathError::Outside(rel));
-    }
-    Ok(Resolved { rel, abs })
 }
 
 /// A running server: worker threads plus the address they are serving.
@@ -444,6 +517,9 @@ fn respond(state: &State, rq: Request) {
     };
     let query = parse_query(&query_raw);
     let prefs = prefs_from(state, &rq);
+    // One snapshot of the served root for the whole request, so a re-root
+    // mid-request cannot hand half a page one tree and half another.
+    let root = state.cfg.root();
 
     // Token handshake, desktop builds only: hand out the cookie, then bounce
     // to the requested page. Registered only when a token is configured.
@@ -485,40 +561,45 @@ fn respond(state: &State, rq: Request) {
             let path = query_get(&query, "path").unwrap_or_default();
             let _ = rq.respond(html_resp(
                 200,
-                page::wait_page(state, prefs, &url_now, path),
+                page::wait_page(state, &root, prefs, &url_now, path),
             ));
             return;
         }
         _ => {}
     }
 
-    // Decode and sanitize the filesystem path.
-    let (rel, canon) = match resolve_in_root(&state.cfg.root(), &path_raw) {
-        Ok(r) => (r.rel, r.abs),
+    // Decode and sanitize the served path.
+    let (rel, canon) = match resolve_in_root(root.vfs.as_ref(), &path_raw) {
+        Ok(r) => (r.rel, r.path),
         Err(PathError::Bad) => {
             let _ = rq.respond(html_resp(
                 400,
-                page::error_page(state, prefs, &[], &url_now, 400, "bad path"),
+                page::error_page(state, &root, prefs, &[], &url_now, 400, "bad path"),
             ));
             return;
         }
         Err(PathError::Missing(rel)) => {
             let _ = rq.respond(html_resp(
                 404,
-                page::error_page(state, prefs, &rel, &url_now, 404, "not found"),
+                page::error_page(state, &root, prefs, &rel, &url_now, 404, "not found"),
             ));
             return;
         }
         Err(PathError::Outside(rel)) => {
             let _ = rq.respond(html_resp(
                 403,
-                page::error_page(state, prefs, &rel, &url_now, 403, "forbidden"),
+                page::error_page(state, &root, prefs, &rel, &url_now, 403, "forbidden"),
             ));
             return;
         }
     };
 
-    if canon.is_dir() {
+    let is_dir = root
+        .vfs
+        .metadata(&canon)
+        .map(|m| m.is_dir)
+        .unwrap_or(false);
+    if is_dir {
         // Directory URLs need a trailing slash so relative links resolve.
         if !path_raw.ends_with('/') {
             let loc = if query_raw.is_empty() {
@@ -530,11 +611,11 @@ fn respond(state: &State, rq: Request) {
             return;
         }
         if wants_html(&rq) {
-            let body = page::listing_page(state, prefs, &rel, &canon, &query, &url_now);
+            let body = page::listing_page(state, &root, prefs, &rel, &canon, &query, &url_now);
             let _ = rq.respond(html_resp(200, body));
         } else {
             let _ = rq.respond(
-                Response::from_string(page::listing_text(state, &canon))
+                Response::from_string(page::listing_text(state, root.vfs.as_ref(), &canon))
                     .with_header(h("Content-Type", "text/plain; charset=utf-8")),
             );
         }
@@ -556,16 +637,16 @@ fn respond(state: &State, rq: Request) {
     let bare = query_get(&query, "bare") == Some("1");
     let framed = want_raw && !want_dl && !bare;
     if framed && wants_html(&rq) && !is_subresource(&rq) {
-        let body = view::raw_page(state, prefs, &rel, &url_now);
+        let body = view::raw_page(state, &root, prefs, &rel, &url_now);
         let _ = rq.respond(html_resp(200, body));
         return;
     }
     if want_raw || want_dl || !wants_html(&rq) || is_subresource(&rq) {
-        serve_raw(rq, &canon, &name, want_dl);
+        serve_raw(rq, root.vfs.as_ref(), &canon, &name, want_dl);
         return;
     }
 
-    let body = view::file_page(state, prefs, &rel, &canon, &query, &url_now);
+    let body = view::file_page(state, &root, prefs, &rel, &canon, &query, &url_now);
     let _ = rq.respond(html_resp(200, body));
 }
 
@@ -658,13 +739,13 @@ fn parse_range(value: &str, size: u64) -> Option<(u64, u64)> {
 /// costs. The nanoseconds are in there because a second is a long time in the
 /// life of a file being edited, and two writes inside one would otherwise share
 /// a tag.
-fn etag_for(meta: &Metadata) -> Option<String> {
-    let t = meta.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+fn etag_for(meta: &Meta) -> Option<String> {
+    let t = meta.mtime?.duration_since(UNIX_EPOCH).ok()?;
     Some(format!(
         "\"{:x}-{:x}-{:x}\"",
         t.as_secs(),
         t.subsec_nanos(),
-        meta.len()
+        meta.len
     ))
 }
 
@@ -679,13 +760,21 @@ fn etag_matches(given: &str, tag: &str) -> bool {
             .any(|t| t.strip_prefix("W/").unwrap_or(t) == tag)
 }
 
-fn serve_raw(rq: Request, abs: &Path, name: &str, attachment: bool) {
-    let Ok(mut file) = File::open(abs) else {
+fn serve_raw(rq: Request, vfs: &dyn Vfs, path: &VfsPath, name: &str, attachment: bool) {
+    let Ok(mut file) = vfs.open(path) else {
         let _ = rq.respond(Response::from_string("not found").with_status_code(StatusCode(404)));
         return;
     };
-    let meta = file.metadata().ok();
-    let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+    // The size of the handle being streamed, not of whatever the path names
+    // by the time a second lookup runs — a file replaced between the two
+    // would otherwise get the new length on the old bytes. The ETag still
+    // comes from a path lookup, so it is only kept when it describes the
+    // same length as the handle.
+    let size = file
+        .seek(SeekFrom::End(0))
+        .and_then(|n| file.seek(SeekFrom::Start(0)).map(|_| n))
+        .unwrap_or(0);
+    let meta = vfs.metadata(path).ok().filter(|m| m.len == size);
     let etag = meta.as_ref().and_then(etag_for);
     let mime = mime_for_ext(&ext_of(name));
 
@@ -761,5 +850,44 @@ fn serve_raw(rq: Request, abs: &Path, name: &str, attachment: bool) {
             let resp = Response::new(StatusCode(200), headers, file, Some(size as usize), None);
             let _ = rq.respond(resp);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{leaf_of, root_id_is_local};
+
+    /// `leaf_of` must answer what `Path::file_name` answered when a RootId
+    /// was a `PathBuf`, across the shapes a canonicalized root can take.
+    #[test]
+    fn leaf_of_mirrors_file_name() {
+        assert_eq!(leaf_of("/home/x/mix"), Some("mix"));
+        assert_eq!(leaf_of("/"), None);
+        assert_eq!(leaf_of("name"), Some("name"));
+        assert_eq!(leaf_of(""), None);
+        assert_eq!(leaf_of("ssh:web:/var/www"), Some("www"));
+        // `\` splits only where the host splits on it: a Unix file may carry
+        // it in its name, and `Path::file_name` kept it there too.
+        #[cfg(not(windows))]
+        assert_eq!(leaf_of(r"/x/a\b"), Some(r"a\b"));
+        #[cfg(windows)]
+        {
+            assert_eq!(leaf_of(r"C:\"), None);
+            assert_eq!(leaf_of(r"C:\Users\x"), Some("x"));
+            assert_eq!(leaf_of(r"\\server\share"), None);
+            assert_eq!(leaf_of(r"\\server\share\dir"), Some("dir"));
+        }
+    }
+
+    /// The scheme grammar, not "all letters": `s3:` is remote, a drive
+    /// letter is local, and a path with a stray `:` stays local.
+    #[test]
+    fn scheme_grammar_decides_remote() {
+        assert!(root_id_is_local("/home/x"));
+        assert!(root_id_is_local(r"C:\Users\x"));
+        assert!(root_id_is_local("/odd:name/dir"));
+        assert!(!root_id_is_local("ssh:web:/var/www"));
+        assert!(!root_id_is_local("s3:bucket:/data"));
+        assert!(!root_id_is_local("ssh2:x:/y"));
     }
 }

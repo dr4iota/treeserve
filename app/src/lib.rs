@@ -21,7 +21,9 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
 use treeserve::{Config, RootStatus};
 
-const WINDOW: &str = "main";
+/// The one window's label — public so a downstream action ([`ShellExt`])
+/// can find the same window the shell drives.
+pub const WINDOW: &str = "main";
 const WORKER_THREADS: usize = 4;
 /// How many roots the Recent list keeps.
 const RECENT_MAX: usize = 8;
@@ -45,8 +47,11 @@ addEventListener('keydown', function (e) {
 });
 "#;
 
-/// The running server, kept in Tauri's managed state.
-struct Serving {
+/// The running server, kept in Tauri's managed state. Public so a downstream
+/// action can reach the same server the shell drives —
+/// `app.try_state::<Serving>()` — to re-root it (`Config::set_root_vfs`) and
+/// to build URLs on its origin.
+pub struct Serving {
     inner: treeserve::Serving,
     /// `http://127.0.0.1:<port>`, the only origin the window may navigate to.
     origin: String,
@@ -57,8 +62,85 @@ struct Serving {
     entry: String,
 }
 
+impl Serving {
+    /// The server's shared state: the `Config` a root opener re-roots and
+    /// feeds Places/Recent/status through.
+    pub fn state(&self) -> &Arc<treeserve::State> {
+        &self.inner.state
+    }
+
+    /// `http://127.0.0.1:<port>` — for building `/.ts/…` URLs to navigate to.
+    pub fn origin(&self) -> &str {
+        &self.origin
+    }
+
+    /// The token-handshake URL a fresh navigation should enter through; it
+    /// sets the cookie and bounces to `/`.
+    pub fn entry(&self) -> &str {
+        &self.entry
+    }
+}
+
+/// What a downstream app may hang on the shell. [`run`] is
+/// `run_with(generate_context!(), ShellExt::default())`; a downstream build
+/// supplies its own context — its own identifier, icons and windows — and its
+/// extensions, and everything else here serves both apps from one source.
+///
+/// Unstable: this is the seam for downstream apps of this repo, not a public
+/// API with compatibility promises.
+#[derive(Default)]
+pub struct ShellExt {
+    /// Tried on every navigation before the built-in `/.ts/…` handling.
+    /// Returning true claims the URL: the navigation is cancelled and the
+    /// action has done whatever it does, exactly like the built-ins.
+    pub actions: Vec<Box<dyn Fn(&AppHandle, &tauri::Url) -> bool + Send + Sync>>,
+    /// Extra Places entries, appended after the platform's own —
+    /// (label, RootId) pairs, like `Config::places`.
+    pub extra_places: Vec<Box<dyn Fn(&AppHandle) -> Vec<(String, String)> + Send + Sync>>,
+    /// Replaces the shell's keyboard-shortcut script wholesale. A downstream
+    /// page can need the very keys the default script binds, so the guard
+    /// belongs to whoever knows about that page.
+    pub init_script: Option<String>,
+    /// Origins the window may navigate to besides the local server. An entry
+    /// ending in `:` with no `/` names a scheme (`treessh:`) — custom schemes
+    /// have opaque origins, so the scheme is the whole identity. Anything
+    /// else must equal the URL's serialized origin exactly
+    /// (`http://treessh.localhost`, the form Windows and Android serve custom
+    /// protocols on) — equality, not a prefix, so a lookalike host with a
+    /// suffix cannot ride the allowlist. Everything not local and not listed
+    /// still opens in the user's browser.
+    pub allowed_origins: Vec<String>,
+    /// One shot at the builder before the shell finishes it: plugins to
+    /// register, mobile-specific setup.
+    #[allow(clippy::type_complexity)]
+    pub configure:
+        Option<Box<dyn FnOnce(tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> + Send>>,
+}
+
+/// The extensions after defaults are resolved, in Tauri's managed state so
+/// the navigation handler and every `start` can reach them.
+struct Ext {
+    actions: Vec<Box<dyn Fn(&AppHandle, &tauri::Url) -> bool + Send + Sync>>,
+    extra_places: Vec<Box<dyn Fn(&AppHandle) -> Vec<(String, String)> + Send + Sync>>,
+    init_script: String,
+    allowed_origins: Vec<String>,
+}
+
+struct SharedExt(Arc<Ext>);
+
 pub fn run() {
-    tauri::Builder::default()
+    run_with(tauri::generate_context!(), ShellExt::default());
+}
+
+pub fn run_with(context: tauri::Context<tauri::Wry>, mut ext: ShellExt) {
+    let configure = ext.configure.take();
+    let ext = Arc::new(Ext {
+        actions: ext.actions,
+        extra_places: ext.extra_places,
+        init_script: ext.init_script.unwrap_or_else(|| SHORTCUTS.to_string()),
+        allowed_origins: ext.allowed_origins,
+    });
+    let mut builder = tauri::Builder::default()
         // Must be registered first. A second launch re-roots the open window
         // when it names a directory (Explorer "open with", drag onto the exe).
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
@@ -70,8 +152,13 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
-        .setup(|app| {
+        .plugin(tauri_plugin_opener::init());
+    if let Some(f) = configure {
+        builder = f(builder);
+    }
+    builder
+        .setup(move |app| {
+            app.manage(SharedExt(Arc::clone(&ext)));
             let handle = app.handle().clone();
             // The server and the window go up first, hidden, on a placeholder root
             // that is never seen. Creating the window is the one slow thing left in
@@ -96,7 +183,7 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running treesight");
 }
 
@@ -184,7 +271,11 @@ fn open_root(app: &AppHandle, dir: PathBuf, remember: bool) {
                 // The pane said what it knew when it was drawn; this is fresher,
                 // so record it before going back to a page that will show it.
                 if let Some(serving) = back.try_state::<Serving>() {
-                    serving.inner.state.cfg.set_root_status(dir.clone(), status);
+                    serving
+                        .inner
+                        .state
+                        .cfg
+                        .set_root_status(treeserve::util::display_path(&dir), status);
                 }
                 fail(&back, &cannot_open(&dir, status), false);
                 open_failed(&back, previous);
@@ -286,6 +377,7 @@ fn show(win: &tauri::WebviewWindow) {
 }
 
 fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
+    let ext = Arc::clone(&app.state::<SharedExt>().0);
     let token = new_token();
     let mut cfg = Config::new(root.clone());
     cfg.port = 0; // let the OS pick a free port
@@ -295,8 +387,12 @@ fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
     // Recent and the picker button. Only ever set here — a server reachable by
     // anything but this window has no business offering them.
     cfg.app_ui = true;
-    cfg.places = places(app);
-    cfg.set_recent(recent(app));
+    cfg.places = places(app)
+        .into_iter()
+        .map(|(label, dir)| (label, treeserve::util::display_path(&dir)))
+        .chain(ext.extra_places.iter().flat_map(|f| f(app)))
+        .collect();
+    cfg.set_recent(recent_ids(app));
 
     let inner = treeserve::spawn(cfg).map_err(|e| format!("Cannot start the local server: {e}"))?;
     let origin = format!("http://127.0.0.1:{}", inner.addr.port());
@@ -313,14 +409,14 @@ fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
         WINDOW,
         WebviewUrl::External(entry.parse().map_err(|e| format!("bad url: {e}"))?),
     )
-    .title(window_title(&root))
+    .title(window_title(&treeserve::util::display_path(&root)))
     .inner_size(1200.0, 850.0)
     .min_inner_size(480.0, 360.0)
     // Shown by whoever knows there is something worth showing — `open_root`,
     // once it has a folder. A window built before the picker has been answered
     // would otherwise flash a placeholder.
     .visible(false)
-    .initialization_script(SHORTCUTS)
+    .initialization_script(ext.init_script.as_str())
     // The title follows the served root, which "Open Folder…" can change, so
     // it is refreshed on every page load rather than only at window creation.
     .on_page_load({
@@ -329,14 +425,23 @@ fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
             if payload.event() == tauri::webview::PageLoadEvent::Finished
                 && let Some(serving) = app.try_state::<Serving>()
             {
-                let _ = win.set_title(&window_title(&serving.inner.state.cfg.root()));
+                let _ = win.set_title(&window_title(&serving.inner.state.cfg.root().id));
             }
         }
     })
     .on_navigation({
         let app = app.clone();
+        let ext = Arc::clone(&ext);
         move |url| {
-            if url.as_str().starts_with(&origin) {
+            // Downstream actions first: a URL an extension claims is handled
+            // entirely by it, the way `/.ts/open` is handled below.
+            if ext.actions.iter().any(|a| a(&app, url)) {
+                return false;
+            }
+            // Origin equality, not a prefix: `http://127.0.0.1:45678` and
+            // `http://127.0.0.1:4567@evil.com` both start with this origin's
+            // text and are both someone else's server.
+            if url.origin().ascii_serialization() == origin {
                 // The page's own chrome. These paths are not routes: the server
                 // never re-roots itself and would answer 404, so the whole
                 // capability lives here, in the one client that may have it.
@@ -349,6 +454,10 @@ fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
                 if is_download_link(url) && save_as(&app, url) {
                     return false;
                 }
+                return true;
+            }
+            // Origins an extension serves itself — a plugin scheme page.
+            if origin_allowed(&ext.allowed_origins, url) {
                 return true;
             }
             // Links out of the served tree belong in the user's browser.
@@ -420,38 +529,42 @@ fn check_roots(app: &AppHandle) {
     let app = app.clone();
     thread::spawn(move || {
         let recent = state.cfg.recent();
-        let paths: Vec<PathBuf> = state
+        // Remote ids are skipped: probing one would mean a network handshake,
+        // and this loop exists precisely because a probe can hang. Whatever
+        // supplied a remote entry owns saying how it is doing.
+        let ids: Vec<String> = state
             .cfg
             .places
             .iter()
-            .map(|(_, p)| p.clone())
+            .map(|(_, id)| id.clone())
             .chain(recent.iter().cloned())
+            .filter(|id| treeserve::root_id_is_local(id))
             .collect();
 
-        let checks: Vec<_> = paths
+        let checks: Vec<_> = ids
             .into_iter()
-            .map(|path| {
+            .map(|id| {
                 let state = Arc::clone(&state);
                 thread::spawn(move || {
-                    let status = match fs::metadata(&path) {
+                    let status = match fs::metadata(Path::new(&id)) {
                         Ok(m) if m.is_dir() => RootStatus::Ok,
                         // Something is there, but not a folder any more.
                         Ok(_) => RootStatus::Missing,
                         Err(e) => classify(&e),
                     };
-                    state.cfg.set_root_status(path.clone(), status);
-                    (path, status)
+                    state.cfg.set_root_status(id.clone(), status);
+                    (id, status)
                 })
             })
             .collect();
 
-        let answers: Vec<(PathBuf, RootStatus)> =
+        let answers: Vec<(String, RootStatus)> =
             checks.into_iter().filter_map(|h| h.join().ok()).collect();
 
-        let gone: Vec<PathBuf> = answers
+        let gone: Vec<String> = answers
             .iter()
-            .filter(|(path, status)| *status != RootStatus::Ok && recent.contains(path))
-            .map(|(path, _)| path.clone())
+            .filter(|(id, status)| *status != RootStatus::Ok && recent.contains(id))
+            .map(|(id, _)| id.clone())
             .collect();
         if let (Some(file), false) = (file, gone.is_empty()) {
             prune_recent(&file, &gone);
@@ -522,14 +635,20 @@ fn unreachable_code(e: &io::Error) -> bool {
 
 /// Drops paths from the Recent file, leaving everything else as it is — the file
 /// may have been rewritten by `remember_root` while the checks were running.
-fn prune_recent(file: &Path, gone: &[PathBuf]) {
+fn prune_recent(file: &Path, gone: &[String]) {
     let Ok(text) = fs::read_to_string(file) else {
         return;
     };
+    // Lines written before the RootId change hold the verbatim form
+    // (`\\?\C:\…`), so each line is normalized the same way the ids were
+    // before comparing — otherwise a dead pre-upgrade entry never leaves.
     let kept: String = text
         .lines()
         .map(str::trim)
-        .filter(|l| !l.is_empty() && !gone.iter().any(|g| g == Path::new(l)))
+        .filter(|l| {
+            let norm = treeserve::util::display_path(Path::new(l));
+            !l.is_empty() && !gone.iter().any(|g| *g == norm)
+        })
         .map(|l| format!("{l}\n"))
         .collect();
     let _ = fs::write(file, kept);
@@ -558,10 +677,11 @@ fn save_as(app: &AppHandle, url: &tauri::Url) -> bool {
     let Some(serving) = app.try_state::<Serving>() else {
         return false;
     };
-    let Ok(target) = treeserve::resolve_in_root(&serving.inner.state.cfg.root(), url.path()) else {
+    let root = serving.inner.state.cfg.root();
+    let Ok(target) = treeserve::resolve_in_root(root.vfs.as_ref(), url.path()) else {
         return false;
     };
-    if !target.abs.is_file() {
+    if !root.vfs.metadata(&target.path).map(|m| m.is_file).unwrap_or(false) {
         return false;
     }
 
@@ -574,13 +694,31 @@ fn save_as(app: &AppHandle, url: &tauri::Url) -> bool {
     if let Ok(dir) = app.path().download_dir() {
         dialog = dialog.set_directory(dir);
     }
-    let src = target.abs;
+    let vfs = Arc::clone(&root.vfs);
+    let src = target.path;
     dialog.save_file(move |dest| {
         let Some(dest) = dest.and_then(|d| d.into_path().ok()) else {
             return; // cancelled
         };
-        if let Err(e) = fs::copy(&src, &dest) {
-            fail(&app, &format!("Could not save {}: {e}", dest.display()), false);
+        // Streamed through the backend rather than `fs::copy`, which only a
+        // local path could satisfy. `fs::copy` also carried the permission
+        // bits, so a downloaded script stayed runnable — restore them from
+        // the backend's metadata where it knows them.
+        let mode = vfs.metadata(&src).ok().and_then(|m| m.mode);
+        let copied = vfs.open(&src).and_then(|mut from| {
+            fs::File::create(&dest).and_then(|mut to| io::copy(&mut from, &mut to))
+        });
+        match copied {
+            Err(e) => fail(&app, &format!("Could not save {}: {e}", dest.display()), false),
+            Ok(_) => {
+                #[cfg(unix)]
+                if let Some(mode) = mode {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = fs::set_permissions(&dest, fs::Permissions::from_mode(mode));
+                }
+                #[cfg(not(unix))]
+                let _ = mode;
+            }
         }
     });
     true
@@ -629,6 +767,13 @@ fn shell_action(app: &AppHandle, url: &tauri::Url) -> bool {
         // already lists it. Both carry a path we rendered ourselves, though
         // `open_root` still checks it — a remembered folder can go away.
         "/.ts/root" | "/.ts/place" => match url.query_pairs().find(|(k, _)| k == "path") {
+            // A remote id reaching this arm means no extension action claimed
+            // it. Coercing it into a PathBuf would "open" a folder named
+            // `ssh:…`, fail, and grey a healthy entry with a status nothing
+            // ever corrects — so say what actually happened instead.
+            Some((_, path)) if !treeserve::root_id_is_local(path.trim()) => {
+                fail(app, &format!("Nothing here can open {}.", path.trim()), false);
+            }
             Some((_, path)) => {
                 let dir = PathBuf::from(path.trim());
                 open_root(app, dir, url.path() == "/.ts/root");
@@ -697,12 +842,21 @@ fn places(app: &AppHandle) -> Vec<(String, PathBuf)> {
     out
 }
 
-fn window_title(root: &Path) -> String {
-    match root.file_name() {
-        Some(name) => format!("{} — treesight", name.to_string_lossy()),
+fn window_title(root_id: &str) -> String {
+    match treeserve::leaf_of(root_id) {
+        Some(name) => format!("{name} — treesight"),
         // A drive or a share: no last component, so say which one it is.
-        None => format!("{} — treesight", treeserve::util::display_path(root)),
+        None => format!("{root_id} — treesight"),
     }
+}
+
+/// Whether an extension declared this URL's origin. See
+/// [`ShellExt::allowed_origins`] for the two entry shapes.
+fn origin_allowed(allowed: &[String], url: &tauri::Url) -> bool {
+    allowed.iter().any(|a| match a.strip_suffix(':') {
+        Some(scheme) if !a.contains('/') => url.scheme() == scheme,
+        _ => url.origin().ascii_serialization() == *a,
+    })
 }
 
 /// Says something happened, for actions with no visible result of their own.
@@ -762,30 +916,51 @@ fn recent(app: &AppHandle) -> Vec<PathBuf> {
         .collect()
 }
 
+/// The Recent roots as the RootId strings the server's lists and status map
+/// speak — for a local root, the display-form path.
+fn recent_ids(app: &AppHandle) -> Vec<String> {
+    recent(app)
+        .iter()
+        .map(|p| treeserve::util::display_path(p))
+        .collect()
+}
+
 /// Moves `root` to the front of the Recent list, on disk and in the running
 /// server so the next page render shows it. Places are deliberately not fed
 /// through here: that list stays fixed.
 fn remember_root(app: &AppHandle, root: &Path) {
+    // Compare in display form: the file's lines are display form, while
+    // `root` is verbatim from `canonicalize` — on Windows those spellings
+    // never match, and a reopened folder would duplicate instead of moving
+    // to the front.
+    let root_id = treeserve::util::display_path(root);
     let mut list = recent(app);
-    list.retain(|p| p != root);
+    list.retain(|p| treeserve::util::display_path(p) != root_id);
     list.insert(0, root.to_path_buf());
     list.truncate(RECENT_MAX);
 
     if let Some(serving) = app.try_state::<Serving>() {
-        serving.inner.state.cfg.set_recent(list.clone());
+        serving.inner.state.cfg.set_recent(
+            list.iter().map(|p| treeserve::util::display_path(p)).collect(),
+        );
         // We got here through `canonicalize`, so this one is known good without
         // anybody having to look again.
         serving
             .inner
             .state
             .cfg
-            .set_root_status(root.to_path_buf(), RootStatus::Ok);
+            .set_root_status(treeserve::util::display_path(root), RootStatus::Ok);
     }
     let Some(file) = recent_file(app) else { return };
     if let Some(dir) = file.parent() {
         let _ = fs::create_dir_all(dir);
     }
-    let text: String = list.iter().map(|p| format!("{}\n", p.display())).collect();
+    // Written in display form — the same string the pane shows and the status
+    // map is keyed by, so the three never disagree about which root is which.
+    let text: String = list
+        .iter()
+        .map(|p| format!("{}\n", treeserve::util::display_path(p)))
+        .collect();
     let _ = fs::write(file, text);
 }
 
@@ -809,5 +984,33 @@ mod tests {
             classify(&io::Error::from_raw_os_error(dead)),
             RootStatus::Unreachable
         );
+    }
+
+    /// An allowlist that matched by prefix would wave
+    /// `http://treessh.localhost.evil.com` through on the strength of
+    /// `http://treessh.localhost`; equality on the serialized origin (or the
+    /// whole scheme, for opaque-origin custom protocols) does not.
+    #[test]
+    fn lookalike_origins_stay_outside() {
+        let allowed = vec!["treessh:".to_string(), "http://treessh.localhost".to_string()];
+        let u = |s: &str| tauri::Url::parse(s).unwrap();
+        assert!(origin_allowed(&allowed, &u("treessh://term")));
+        assert!(origin_allowed(&allowed, &u("http://treessh.localhost/term.html")));
+        assert!(!origin_allowed(&allowed, &u("http://treessh.localhost.evil.com/x")));
+        assert!(!origin_allowed(&allowed, &u("http://evil.com/treessh.localhost")));
+        assert!(!origin_allowed(&allowed, &u("https://treessh.localhost/x")));
+    }
+
+    /// The line between "probe it" and "leave it to whoever brought it" is
+    /// treeserve's `root_id_is_local`; this pins the cases the shell cares
+    /// about (probing, pruning) so a grammar change there fails loudly here.
+    #[test]
+    fn drive_letters_are_local_and_schemes_are_not() {
+        assert!(treeserve::root_id_is_local("/home/x/mix"));
+        assert!(treeserve::root_id_is_local(r"C:\Users\x"));
+        assert!(treeserve::root_id_is_local(r"\\server\share"));
+        assert!(treeserve::root_id_is_local("/odd:name/dir"));
+        assert!(!treeserve::root_id_is_local("ssh:prod-web:/var/www"));
+        assert!(!treeserve::root_id_is_local("s3:bucket:/data"));
     }
 }

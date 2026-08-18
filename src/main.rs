@@ -157,7 +157,7 @@ fn parse_args() -> Config {
 fn main() {
     let cfg = parse_args();
     let addr = format!("{}:{}", cfg.bind, cfg.port);
-    let root = cfg.root();
+    let root = cfg.root().id.clone();
     let serving = treeserve::spawn(cfg).unwrap_or_else(|e| {
         eprintln!("error: cannot bind {}: {}", addr, e);
         exit(1);
@@ -166,7 +166,7 @@ fn main() {
         "{} v{}: serving {} at http://{}/",
         env!("CARGO_PKG_NAME"),
         env!("CARGO_PKG_VERSION"),
-        root.display(),
+        root,
         addr
     );
     serving.join();

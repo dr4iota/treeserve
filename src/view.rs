@@ -1,13 +1,11 @@
-use std::fs;
-use std::path::Path;
-
 use crate::md::{render_markdown, render_mermaid_figure};
 use crate::page::{
     bare_layout, flag, layout, svg_icon, Prefs, ICON_DOWNLOAD, ICON_PRINT, ICON_RAW, ICON_RENDERED,
     ICON_SOURCE,
 };
 use crate::util::*;
-use crate::State;
+use crate::vfs::VfsPath;
+use crate::{Root, State};
 
 /// The bytes, for something on a page to point at. `bare` says so in the URL
 /// rather than leaving it to be worked out from the request's headers: what a
@@ -77,7 +75,7 @@ fn meta_line(size: u64, mtime: Option<std::time::SystemTime>, extra: &str) -> St
 /// viewer's wrapping, the PDF viewer, an image at its own size — and none of the
 /// furniture the other views put around their content, since none of it is the
 /// file. What the header says and what a flag does is ours; the rest is not.
-pub fn raw_page(state: &State, prefs: Prefs, rel: &[String], url_now: &str) -> String {
+pub fn raw_page(state: &State, root: &Root, prefs: Prefs, rel: &[String], url_now: &str) -> String {
     let name = rel.last().map(String::as_str).unwrap_or("");
     let base = href_path(rel);
     // The way out is the way in reversed: where every other view offers Raw,
@@ -105,22 +103,24 @@ pub fn raw_page(state: &State, prefs: Prefs, rel: &[String], url_now: &str) -> S
         html_escape(&raw_href(rel)),
         html_escape(name)
     );
-    bare_layout(state, prefs, rel, url_now, &controls, &content)
+    bare_layout(state, root, prefs, rel, url_now, &controls, &content)
 }
 
 pub fn file_page(
     state: &State,
+    root: &Root,
     prefs: Prefs,
     rel: &[String],
-    abs: &Path,
+    canon: &VfsPath,
     query: &[(String, String)],
     url_now: &str,
 ) -> String {
+    let vfs = root.vfs.as_ref();
     let name = rel.last().map(String::as_str).unwrap_or("");
     let ext = ext_of(name);
-    let meta = fs::metadata(abs).ok();
-    let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
-    let mtime = meta.and_then(|m| m.modified().ok());
+    let meta = vfs.metadata(canon).ok();
+    let size = meta.as_ref().map(|m| m.len).unwrap_or(0);
+    let mtime = meta.and_then(|m| m.mtime);
 
     if IMAGE_EXTS.contains(&ext.as_str()) {
         let content = format!(
@@ -129,7 +129,7 @@ pub fn file_page(
             html_escape(&raw_href(rel)),
             html_escape(name)
         );
-        return layout(state, prefs, rel, url_now, &std_controls(rel), false, &content);
+        return layout(state, root, prefs, rel, url_now, &std_controls(rel), false, &content);
     }
     if VIDEO_EXTS.contains(&ext.as_str()) {
         let content = format!(
@@ -137,7 +137,7 @@ pub fn file_page(
             meta_line(size, mtime, "video"),
             html_escape(&raw_href(rel))
         );
-        return layout(state, prefs, rel, url_now, &std_controls(rel), false, &content);
+        return layout(state, root, prefs, rel, url_now, &std_controls(rel), false, &content);
     }
     if AUDIO_EXTS.contains(&ext.as_str()) {
         let content = format!(
@@ -145,7 +145,7 @@ pub fn file_page(
             meta_line(size, mtime, "audio"),
             html_escape(&raw_href(rel))
         );
-        return layout(state, prefs, rel, url_now, &std_controls(rel), false, &content);
+        return layout(state, root, prefs, rel, url_now, &std_controls(rel), false, &content);
     }
     if ext == "pdf" {
         let content = format!(
@@ -153,7 +153,7 @@ pub fn file_page(
             meta_line(size, mtime, "pdf"),
             html_escape(&raw_href(rel))
         );
-        return layout(state, prefs, rel, url_now, &std_controls(rel), false, &content);
+        return layout(state, root, prefs, rel, url_now, &std_controls(rel), false, &content);
     }
 
     // Text-ish content from here on.
@@ -165,12 +165,12 @@ pub fn file_page(
             human_size(size),
             html_escape(&href_path(rel))
         );
-        return layout(state, prefs, rel, url_now, &std_controls(rel), false, &content);
+        return layout(state, root, prefs, rel, url_now, &std_controls(rel), false, &content);
     }
 
-    let Ok(bytes) = fs::read(abs) else {
+    let Ok(bytes) = vfs.read(canon) else {
         let content = "<div class=\"bigmsg\"><p>Could not read file.</p></div>".to_string();
-        return layout(state, prefs, rel, url_now, "", false, &content);
+        return layout(state, root, prefs, rel, url_now, "", false, &content);
     };
 
     if looks_binary(&bytes[..bytes.len().min(8192)]) {
@@ -180,7 +180,7 @@ pub fn file_page(
             meta_line(size, mtime, "binary"),
             html_escape(&href_path(rel))
         );
-        return layout(state, prefs, rel, url_now, &std_controls(rel), false, &content);
+        return layout(state, root, prefs, rel, url_now, &std_controls(rel), false, &content);
     }
 
     let text = String::from_utf8_lossy(&bytes);
@@ -208,7 +208,7 @@ pub fn file_page(
                 std_controls(rel)
             );
             let content = format!("<div class=\"md\">{}</div>", body);
-            return layout(state, prefs, rel, url_now, &controls, false, &content);
+            return layout(state, root, prefs, rel, url_now, &controls, false, &content);
         }
     }
 
@@ -256,5 +256,5 @@ pub fn file_page(
         gutter,
         html
     );
-    layout(state, prefs, rel, url_now, &controls, true, &content)
+    layout(state, root, prefs, rel, url_now, &controls, true, &content)
 }
