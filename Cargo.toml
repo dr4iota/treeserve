@@ -19,17 +19,28 @@ libm = "0.2"
 mermaid-rs-renderer = { version = "0.3", default-features = false }
 pulldown-latex = "0.8.0"
 syntect = { version = "5.3.0", default-features = false }
-tiny_http = "0.12.0"
+tiny_http = { version = "0.12.0", optional = true }
 two-face = { version = "0.5.1", default-features = false }
 
 [features]
-default = ["onig"]
+default = ["onig", "http"]
+# The web server. On by default because `treeserve` is a web server; off is for
+# the Tauri app, which serves the same pages through the webview's own protocol
+# and has no use for a socket, a port, or the crate that provides them.
+http = ["dep:tiny_http"]
 # Highlighting regex engine. `onig` is oniguruma, a C library built by cc:
 # roughly twice as fast and a smaller binary, and the default. `pure` swaps in
 # fancy-regex so the whole dependency tree is Rust, which is what makes static
 # musl builds and cross-compilation painless. Output is identical either way.
 onig = ["syntect/default-onig", "two-face/syntect-onig"]
 pure = ["syntect/default-fancy", "two-face/syntect-fancy"]
+
+# Without `http` there is no server for it to start, and a binary that cannot
+# be built is better said here than discovered in the linker.
+[[bin]]
+name = "treeserve"
+path = "src/main.rs"
+required-features = ["http"]
 
 [profile.release]
 lto = true

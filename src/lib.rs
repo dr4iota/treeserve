@@ -4,6 +4,10 @@
 //! Tauri app in `app/`) call [`spawn`] and drive the server themselves.
 
 pub mod hl;
+#[cfg(feature = "http")]
+pub mod http;
+#[cfg(feature = "http")]
+pub use http::{spawn, Serving};
 pub mod md;
 pub mod page;
 pub mod util;
@@ -11,15 +15,11 @@ pub mod vfs;
 pub mod view;
 
 use std::collections::HashMap;
-use std::io::{Cursor, Read, Seek, SeekFrom};
-use std::net::SocketAddr;
-use std::panic::{self, AssertUnwindSafe};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
-use std::thread::{self, JoinHandle};
 use std::time::UNIX_EPOCH;
 
-use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 use two_face::theme::EmbeddedThemeName;
 
 use hl::Hl;
@@ -381,64 +381,6 @@ pub fn resolve_in_root(vfs: &dyn Vfs, url_path: &str) -> Result<Resolved, PathEr
     }
 }
 
-/// A running server: worker threads plus the address they are serving.
-pub struct Serving {
-    pub addr: SocketAddr,
-    pub state: Arc<State>,
-    handles: Vec<JoinHandle<()>>,
-}
-
-impl Serving {
-    /// Blocks until every worker thread exits (i.e. forever, in practice).
-    pub fn join(self) {
-        for h in self.handles {
-            let _ = h.join();
-        }
-    }
-}
-
-/// Binds the configured address and starts the worker pool.
-///
-/// Pass port 0 to let the OS pick one; the assigned address is in
-/// [`Serving::addr`].
-pub fn spawn(cfg: Config) -> Result<Serving, Box<dyn std::error::Error + Send + Sync>> {
-    let server = Server::http(format!("{}:{}", cfg.bind, cfg.port))?;
-    let addr = server
-        .server_addr()
-        .to_ip()
-        .ok_or("server is not listening on an IP address")?;
-
-    let threads = cfg.threads;
-    let hl = Hl::new(cfg.syn_light, cfg.syn_dark);
-    let state = Arc::new(State { cfg, hl });
-    let server = Arc::new(server);
-
-    let mut handles = Vec::new();
-    for _ in 0..threads {
-        let server = Arc::clone(&server);
-        let state = Arc::clone(&state);
-        handles.push(thread::spawn(move || loop {
-            let rq = match server.recv() {
-                Ok(rq) => rq,
-                Err(e) => {
-                    eprintln!("recv error: {}", e);
-                    break;
-                }
-            };
-            let r = panic::catch_unwind(AssertUnwindSafe(|| respond(&state, rq)));
-            if let Err(e) = r {
-                eprintln!("handler panicked: {:?}", e);
-            }
-        }));
-    }
-
-    Ok(Serving {
-        addr,
-        state,
-        handles,
-    })
-}
-
 /// A request, as the part of this that decides what to answer sees it.
 ///
 /// Owns its strings rather than borrowing them. tiny_http lends them from a
@@ -517,40 +459,6 @@ impl Reply {
         self.headers.push(hdr(k, v));
         self
     }
-}
-
-fn h(k: &str, v: &str) -> Header {
-    Header::from_bytes(k.as_bytes(), v.as_bytes()).expect("valid header")
-}
-
-/// Everything tiny_http knows that the router does not.
-fn req_from(rq: &Request) -> Req {
-    Req {
-        url: rq.url().to_string(),
-        headers: rq
-            .headers()
-            .iter()
-            .map(|hd| (hd.field.as_str().as_str().to_string(), hd.value.as_str().to_string()))
-            .collect(),
-        is_get: *rq.method() == Method::Get,
-    }
-}
-
-/// Writes a decided answer down the socket it came from.
-fn write_reply(rq: Request, reply: Reply) {
-    let headers: Vec<Header> = reply.headers.iter().map(|(k, v)| h(k, v)).collect();
-    let status = StatusCode(reply.status);
-    let _ = match reply.body {
-        Body::Empty => rq.respond(Response::new(status, headers, std::io::empty(), Some(0), None)),
-        Body::Text(body) => {
-            let len = body.len();
-            let cursor = Cursor::new(body.into_bytes());
-            rq.respond(Response::new(status, headers, cursor, Some(len), None))
-        }
-        Body::Stream { reader, len } => {
-            rq.respond(Response::new(status, headers, reader, Some(len as usize), None))
-        }
-    };
 }
 
 fn html_reply(status: u16, body: String) -> Reply {
@@ -649,11 +557,6 @@ fn unauthorized(state: &State, req: &Req) -> bool {
         .flat_map(parse_cookies)
         .any(|(k, v)| k == "ts_token" && &v == token);
     !presented
-}
-
-fn respond(state: &State, rq: Request) {
-    let req = req_from(&rq);
-    write_reply(rq, handle(state, &req));
 }
 
 /// Decides the answer to one request, touching no socket and no webview.
