@@ -708,26 +708,38 @@ fn save_as(app: &AppHandle, url: &tauri::Url) -> bool {
         let Some(dest) = dest.and_then(|d| d.into_path().ok()) else {
             return; // cancelled
         };
-        // Streamed through the backend rather than `fs::copy`, which only a
-        // local path could satisfy. `fs::copy` also carried the permission
-        // bits, so a downloaded script stayed runnable — restore them from
-        // the backend's metadata where it knows them.
-        let mode = vfs.metadata(&src).ok().and_then(|m| m.mode);
-        let copied = vfs.open(&src).and_then(|mut from| {
-            fs::File::create(&dest).and_then(|mut to| io::copy(&mut from, &mut to))
-        });
-        match copied {
-            Err(e) => fail(&app, &format!("Could not save {}: {e}", dest.display()), false),
-            Ok(_) => {
-                #[cfg(unix)]
-                if let Some(mode) = mode {
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = fs::set_permissions(&dest, fs::Permissions::from_mode(mode));
+        // On a thread, because the copy is as slow as the backend is far away.
+        // A local file arrives at disk speed and the dialog's own callback
+        // could carry it; a backend reading over a network takes as long as
+        // the file is big, and this callback runs where a click is answered —
+        // the window would stop repainting for the length of the transfer,
+        // including the part of it that would have said what was going on.
+        thread::spawn(move || {
+            // Streamed through the backend rather than `fs::copy`, which only a
+            // local path could satisfy. `fs::copy` also carried the permission
+            // bits, so a downloaded script stayed runnable — restore them from
+            // the backend's metadata where it knows them.
+            let mode = vfs.metadata(&src).ok().and_then(|m| m.mode);
+            let copied = vfs.open(&src).and_then(|mut from| {
+                fs::File::create(&dest).and_then(|mut to| io::copy(&mut from, &mut to))
+            });
+            match copied {
+                Err(e) => {
+                    let msg = format!("Could not save {}: {e}", dest.display());
+                    let back = app.clone();
+                    let _ = app.run_on_main_thread(move || fail(&back, &msg, false));
                 }
-                #[cfg(not(unix))]
-                let _ = mode;
+                Ok(_) => {
+                    #[cfg(unix)]
+                    if let Some(mode) = mode {
+                        use std::os::unix::fs::PermissionsExt;
+                        let _ = fs::set_permissions(&dest, fs::Permissions::from_mode(mode));
+                    }
+                    #[cfg(not(unix))]
+                    let _ = mode;
+                }
             }
-        }
+        });
     });
     true
 }
