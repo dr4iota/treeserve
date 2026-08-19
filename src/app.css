@@ -278,8 +278,11 @@ nav.tree .more { color: var(--muted); font-style: italic; }
    here is a column of paths that must not wrap, so the widest one became the
    width of the page and the window was the thing that overflowed. With a width to
    fit inside, `flex-grow` has something to hand out and the paths ellipsise. */
-body.nothing main { width: 100%; max-width: 60rem; margin-inline: auto; }
-body.nothing .intro { margin: 1rem 0 2rem; max-width: 34rem; }
+body.nothing main { width: 100%; max-width: 44rem; margin-inline: auto; }
+body.nothing .intro { margin: 1rem 0 2rem; }
+/* A page with prose on it should say what page it is. Modest, not a hero: the
+   name is the one thing here that is not a list of somewhere to go. */
+body.nothing .intro h1 { font-size: 1.35rem; font-weight: 600; margin: 0 0 .5rem; }
 body.nothing .intro p { margin: 0 0 1rem; }
 body.nothing .intro .hint { color: var(--muted); font-size: .9rem; }
 /* The one thing to do on this page, so it is the one thing that looks like a

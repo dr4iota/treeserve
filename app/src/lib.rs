@@ -135,6 +135,11 @@ pub struct ShellExt {
     #[allow(clippy::type_complexity)]
     pub extra_sections:
         Vec<Box<dyn Fn(&AppHandle) -> Vec<treeserve::PaneSection> + Send + Sync>>,
+    /// What the start page says this program is, in a sentence or two. Plain
+    /// text; the page escapes it. A downstream app is a different program with
+    /// different reasons to exist — telesight browses machines it has a login
+    /// for, which is not something this sentence should have to cover.
+    pub intro: Option<String>,
     /// Replaces the shell's keyboard-shortcut script wholesale. A downstream
     /// page can need the very keys the default script binds, so the guard
     /// belongs to whoever knows about that page.
@@ -164,6 +169,7 @@ struct Ext {
     extra_sections:
         Vec<Box<dyn Fn(&AppHandle) -> Vec<treeserve::PaneSection> + Send + Sync>>,
     init_script: String,
+    intro: Option<String>,
     allowed_origins: Vec<String>,
 }
 
@@ -180,6 +186,7 @@ pub fn run_with(context: tauri::Context<tauri::Wry>, mut ext: ShellExt) {
         extra_places: ext.extra_places,
         extra_sections: ext.extra_sections,
         init_script: ext.init_script.unwrap_or_else(|| SHORTCUTS.to_string()),
+        intro: ext.intro,
         allowed_origins: ext.allowed_origins,
     });
     #[allow(unused_mut)]
@@ -700,8 +707,20 @@ fn start(app: &AppHandle) -> Result<(), String> {
     cfg.app_ui = true;
     // And whether that chooser can ask this platform for a folder at all.
     cfg.picker = cfg!(desktop);
-    // The name on the start page, which has no folder to be named after.
-    cfg.app_name = Some(env!("CARGO_PKG_NAME").to_string());
+    // The name on the start page and in the window title, which have no folder
+    // to be named after. From Tauri's own product name rather than this crate's:
+    // a downstream shell embedding this one is a different program, and it was
+    // calling itself treesight on both.
+    cfg.app_name = Some(
+        app.config()
+            .product_name
+            .clone()
+            .unwrap_or_else(|| env!("CARGO_PKG_NAME").to_string()),
+    );
+    cfg.app_version = Some(app.config().version.clone().unwrap_or_else(|| {
+        env!("CARGO_PKG_VERSION").to_string()
+    }));
+    cfg.intro = ext.intro.clone();
     cfg.places = places(app)
         .into_iter()
         .map(|(label, dir)| (label, treeserve::util::display_path(&dir)))
@@ -1292,17 +1311,22 @@ fn places(app: &AppHandle) -> Vec<(String, PathBuf)> {
 /// The window's title for a page the tree served: what the root is called, if
 /// whoever re-rooted said, and otherwise the folder it ends in.
 fn window_title(cfg: &Config) -> String {
+    // Whatever this program is called, which is not necessarily this crate.
+    let app = cfg
+        .app_name
+        .clone()
+        .unwrap_or_else(|| env!("CARGO_PKG_NAME").to_string());
     let Some(root) = cfg.root() else {
         // Nothing open: the app is all there is to name.
-        return "treesight".to_string();
+        return app;
     };
     if let Some(name) = cfg.root_name() {
-        return format!("{name} — treesight");
+        return format!("{name} — {app}");
     }
     match treeserve::leaf_of(&root.id) {
-        Some(name) => format!("{name} — treesight"),
+        Some(name) => format!("{name} — {app}"),
         // A drive or a share: no last component, so say which one it is.
-        None => format!("{} — treesight", root.id),
+        None => format!("{} — {app}", root.id),
     }
 }
 

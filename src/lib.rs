@@ -187,6 +187,13 @@ pub struct Config {
     /// named after. The embedder's name, not this crate's: a shell serving these
     /// pages is what the reader thinks they are using.
     pub app_name: Option<String>,
+    /// The version to print beside [`Config::app_name`]. Same reason: a shell
+    /// embedding this crate ships on its own version, not on this one's.
+    pub app_version: Option<String>,
+    /// What the start page says this program is. Plain text, escaped by the page;
+    /// `None` uses the sentence this crate would write about itself, which is only
+    /// right for the program this crate is.
+    pub intro: Option<String>,
     /// Fixed shortcuts for the Places list — (label, RootId) pairs the
     /// embedder supplies, since it is the side that knows the platform's
     /// home, desktop and drive layout. Only rendered when `app_ui` is set.
@@ -241,6 +248,8 @@ impl Config {
             app_ui: false,
             picker: false,
             app_name: None,
+            app_version: None,
+            intro: None,
             places: Vec::new(),
             recent: RwLock::new(Arc::new(Vec::new())),
             root_name: RwLock::new(None),
@@ -313,6 +322,20 @@ impl Config {
 
     /// The site title as of now. Rootless, that is the product's own name — there
     /// is no folder to be named after yet.
+    /// `name vX.Y.Z` for the status line, from whatever this program is rather
+    /// than from this crate.
+    pub fn app_label(&self) -> String {
+        format!(
+            "{} v{}",
+            self.app_name
+                .clone()
+                .unwrap_or_else(|| env!("CARGO_PKG_NAME").to_string()),
+            self.app_version
+                .clone()
+                .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
+        )
+    }
+
     pub fn title(&self) -> String {
         match self.root() {
             Some(root) => self.title_for(&root),

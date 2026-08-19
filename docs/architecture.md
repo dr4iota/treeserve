@@ -220,7 +220,13 @@ starts; `Config::new(dir)` is the CLI's, and re-rooting fills the slot in.
 
 While it is `None`, `handle` answers `/` with `page::start_page` and redirects
 everything else there — a URL from before the folder was closed is history, not
-an error. `start_page` and `/.ts/wait` are drawn by `rootless_page`, a skeleton
+an error. The page names itself once — an `h1` in the content, not in the header bar as
+well — and takes its words from the embedder: `Config::app_name` and
+`app_version` come from Tauri's product name and version (so a shell embedding
+this crate stops calling itself treesight in its own window title and status
+line), and `Config::intro` from `ShellExt::intro`.
+
+`start_page` and `/.ts/wait` are drawn by `rootless_page`, a skeleton
 of its own rather than `layout` with the parts switched off: crumbs, the pane
 flag, line numbers and the path in the footer are all about a root, and a header
 full of controls for a folder nobody chose is chrome pretending. What stays is
@@ -316,6 +322,7 @@ calls `run_with(ctx, ext)`.
 | `actions` | Tried **before** built-in `shell_action`. Return true to claim the URL. Remote `/.ts/root?path=ssh:…` must be claimed here or the built-in will refuse it. |
 | `extra_places` | Extra rows **inside** Places. |
 | `extra_sections` | Whole headed lists between Places and Recent (`PaneSection`). Evaluated at server start; later updates go through `Config::set_sections`. |
+| `intro` | The sentence the start page opens with. A downstream app is a different program; the default sentence is about this one. |
 | `init_script` | Replaces `SHORTCUTS` wholesale (needed so a terminal page can keep Alt+arrows). |
 | `allowed_origins` | Extra origins the webview may load (plugin scheme pages). |
 | `configure` | One shot at the Tauri `Builder` (plugins). Runs after dialog/opener; single-instance stays first. |

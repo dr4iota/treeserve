@@ -527,23 +527,21 @@ fn rootless_page(state: &State, prefs: Prefs<'_>, url_now: &str, content: &str) 
 </head>
 <body class="app nothing">
 <header>
-  <div class="crumbs">{name}</div>
+  <div class="crumbs"></div>
   <div class="controls">{controls}</div>
 </header>
 <main>
 {content}
 </main>
-<footer><span class="where"><span class="app">{pkg} v{version}</span></span></footer>
+<footer><span class="where"><span class="app">{app}</span></span></footer>
 </body>
 </html>
 "#,
         data_theme = data_theme,
         title = html_escape(&state.cfg.title()),
-        name = html_escape(&state.cfg.title()),
         controls = controls,
         content = content,
-        pkg = env!("CARGO_PKG_NAME"),
-        version = env!("CARGO_PKG_VERSION"),
+        app = html_escape(&state.cfg.app_label()),
     )
 }
 
@@ -623,11 +621,10 @@ pub fn layout(
         // is the folder you are actually in. The version goes first in the line
         // and last in importance, so it is what leaves when the line is short.
         footer = format!(
-            "<span class=\"where\" title=\"{0}\"><span class=\"app\">{1} v{2} &middot;</span>{3}</span>\
-             {4}",
+            "<span class=\"where\" title=\"{0}\"><span class=\"app\">{1} &middot;</span>{2}</span>\
+             {3}",
             html_escape(&root.id),
-            env!("CARGO_PKG_NAME"),
-            env!("CARGO_PKG_VERSION"),
+            html_escape(&state.cfg.app_label()),
             path_label(&root.id),
             pick
         ),
@@ -1319,10 +1316,13 @@ pub fn start_page(state: &State, prefs: Prefs<'_>, url_now: &str) -> String {
     );
     lists.push_str("</div>");
 
+    let said = state.cfg.intro.as_deref().unwrap_or(
+        "Browse a folder as a tree: files beside their contents, and nothing \
+         installed on whatever machine you are reading from.",
+    );
     let intro = format!(
-        "<div class=\"intro\"><p>Browse a folder as a tree: files beside their \
-         contents, and nothing installed on whatever machine you are reading \
-         from.</p>{}</div>",
+        "<div class=\"intro\"><h1>{name}</h1><p>{}</p>{}</div>",
+        html_escape(said),
         match state.cfg.picker {
             true => format!(
                 "<p><a class=\"open\" href=\"/.ts/open\">{} Open a folder&hellip;</a></p>",
@@ -1331,7 +1331,8 @@ pub fn start_page(state: &State, prefs: Prefs<'_>, url_now: &str) -> String {
             // A platform whose folder picker we cannot ask: the lists are the way
             // in, and saying so beats offering a button that does nothing.
             false => "<p class=\"hint\">Open one of the places below to start.</p>".to_string(),
-        }
+        },
+        name = html_escape(&state.cfg.title()),
     );
     rootless_page(state, prefs, url_now, &format!("{intro}{lists}"))
 }
