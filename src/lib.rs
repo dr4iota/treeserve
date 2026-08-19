@@ -125,7 +125,10 @@ pub struct PaneSection {
     /// An action on the heading bar itself — "add a server". Drawn as a plus,
     /// because a bar that narrow has room for one thing and adding one more of
     /// what the section lists is that thing: (href, title).
-    pub heading_action: Option<(String, String)>,
+    /// A control on the heading: where it goes, the mark it draws, and what it
+    /// says. The mark is the embedder's because the action is — a list of servers
+    /// is *managed*, and a plus promises adding one.
+    pub heading_action: Option<(String, String, String)>,
     pub entries: Vec<PaneEntry>,
 }
 

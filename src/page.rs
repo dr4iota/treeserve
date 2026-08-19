@@ -165,7 +165,7 @@ fn icon_pane(on: bool) -> String {
 /// The action a pane section's heading can carry. A plus and nothing else: the
 /// bar is .75rem of uppercase and there is room for one mark on the end of it,
 /// so what it draws is the one thing a list of things can be asked for.
-const ICON_PLUS: &str = "<path d=\"M8 3.6v8.8M3.6 8h8.8\"/>";
+pub const ICON_PLUS: &str = "<path d=\"M8 3.6v8.8M3.6 8h8.8\"/>";
 
 /// "Forget this row": a cross, the mark that has meant *remove* on a list since
 /// lists had rows. Drawn to `ICON_PLUS`'s measurements, which is what puts it on
@@ -737,7 +737,7 @@ fn root_list<'a, I: Iterator<Item = Row<'a>>>(
     state: &State,
     class: &str,
     heading: &str,
-    heading_action: Option<&(String, String)>,
+    heading_action: Option<&(String, String, String)>,
     items: I,
 ) {
     let links: String = items
@@ -792,11 +792,11 @@ fn root_list<'a, I: Iterator<Item = Row<'a>>>(
         html_escape(class),
         html_escape(heading),
         match heading_action {
-            Some((href, title)) => format!(
+            Some((href, icon, title)) => format!(
                 "<a class=\"secact\" href=\"{}\" title=\"{}\">{}</a>",
                 html_escape(href),
                 html_escape(title),
-                svg_icon(ICON_PLUS)
+                svg_icon(icon)
             ),
             None => String::new(),
         },
@@ -1347,7 +1347,11 @@ mod tests {
         state.cfg.set_sections(vec![PaneSection {
             class: "servers".to_string(),
             heading: "Servers".to_string(),
-            heading_action: Some(("/x/add".to_string(), "Add a server".to_string())),
+            heading_action: Some((
+                "/x/add".to_string(),
+                ICON_PLUS.to_string(),
+                "Add a server".to_string(),
+            )),
             entries: vec![PaneEntry {
                 label: Some("prod-web".to_string()),
                 id: id.to_string(),
