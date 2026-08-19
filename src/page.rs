@@ -966,6 +966,12 @@ fn tree_dir(
 ) {
     let entries = read_dir_sorted(state, vfs, &VfsPath::new(rel.clone()));
     let total = entries.len();
+    // An opened directory with nothing in it drew `<ul></ul>`: nothing to see, and
+    // a pair of tags to wonder about in the markup. The read has already happened
+    // by here, so knowing it is empty costs nothing.
+    if total == 0 {
+        return;
+    }
     out.push_str("<ul>");
     for e in entries.into_iter().take(TREE_MAX_PER_DIR) {
         rel.push(e.name.clone());
