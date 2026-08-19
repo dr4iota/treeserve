@@ -268,6 +268,57 @@ nav.tree a.asroot:hover { color: var(--link); background: none; }
    current one is reached through either shape. */
 nav.tree .cur > a, nav.tree .cur > .row > a { font-weight: 700; background: var(--border); }
 nav.tree .more { color: var(--muted); font-style: italic; }
+/* The start page: what there is to open, when nothing is. Three lists across a
+   wide window and one column down a narrow one, out of the same section markup the
+   pane draws them in — so they are the same rows, and there is one place where a
+   row's shape is decided. */
+body.nothing main { max-width: 60rem; margin-inline: auto; }
+body.nothing .intro { margin: 1rem 0 2rem; max-width: 34rem; }
+body.nothing .intro p { margin: 0 0 1rem; }
+body.nothing .intro .hint { color: var(--muted); font-size: .9rem; }
+/* The one thing to do on this page, so it is the one thing that looks like a
+   button rather than a link that happens to be first. */
+body.nothing a.open {
+  display: inline-flex;
+  align-items: center;
+  gap: .45rem;
+  padding: .4rem .9rem;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--bg-subtle);
+  color: var(--fg);
+}
+body.nothing a.open:hover { border-color: var(--link); color: var(--link); text-decoration: none; }
+body.nothing .start {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1.5rem 2rem;
+  align-items: start;
+}
+body.nothing .start section { min-width: 0; }
+body.nothing .start h2 {
+  font-size: .75rem;
+  font-weight: 600;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: .25rem;
+  margin: 0 0 .5rem;
+  display: flex;
+  align-items: center;
+}
+body.nothing .start h2 a.secact { margin-left: auto; color: var(--muted); opacity: .7; }
+body.nothing .start h2 a.secact:hover { color: var(--link); opacity: 1; }
+body.nothing .start ul { list-style: none; margin: 0; padding: 0; }
+body.nothing .start li { overflow: hidden; text-overflow: ellipsis; }
+body.nothing .start .row { display: flex; align-items: center; gap: .3rem; }
+body.nothing .start .row > a { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+body.nothing .start a { display: block; padding: .15rem .3rem; border-radius: 4px; color: var(--fg); }
+body.nothing .start a:hover { background: var(--border); text-decoration: none; }
+body.nothing .start .gone > a, body.nothing .start .gone > .row > a { color: var(--muted); }
+body.nothing .start .why { display: block; font-size: .75rem; color: var(--muted); padding: 0 .3rem; }
+
 /* A path shows as much of itself as its box is wide, which is a length only the
    browser knows: the server sends the whole thing split in two and the ellipsis
    lands wherever it has to. The leaf is the folder's own name, with the separator
@@ -673,8 +724,13 @@ footer {
    of one path that has to read as one. */
 footer .where { min-width: 0; }
 footer .where .app { flex: 0 0 auto; margin-right: .35rem; }
-/* The picker sits in the status line because that line is always on screen,
-   including at the widths where the pane is not. */
+/* The picker is on the Files heading, where the tree it opens a folder into is —
+   but that heading is in the pane, and the pane is the first thing to go when the
+   window narrows. So the status line keeps one for exactly the widths where the
+   pane cannot be reached, and no width shows two. */
+@media (min-width: 50.01rem) {
+  footer a.pick { display: none; }
+}
 footer a.pick {
   margin-left: auto;
   flex: 0 0 auto;

@@ -240,28 +240,27 @@ pub fn run_with(context: tauri::Context<tauri::Wry>, mut ext: ShellExt) {
             // reading a dialog or a drive making up its mind. Loading a real page
             // into it is deliberate too: the stylesheet and the layout are warm by
             // the time there is something to paint.
-            if let Err(e) = start(&handle, placeholder_root(&handle)) {
+            if let Err(e) = start(&handle) {
                 fail(&handle, &e, true);
                 return Ok(());
             }
-            #[cfg(desktop)]
-            match first_dir_arg(std::env::args().skip(1)) {
-                // Started from a shell with a path, or via a shell verb.
+            // A folder is opened when this run was given one, and otherwise not at
+            // all: the window comes up on the start page, which says what there is
+            // to open. A modal picker in front of a window nobody has seen yet was
+            // the first thing the app ever did, and it asked a question the answer
+            // to which is often "the one I opened last" — a question the page can
+            // put on screen instead of in the way.
+            let opened = first_dir_arg(std::env::args().skip(1));
+            match opened {
                 Some(dir) => open_root(&handle, dir, true),
-                // Started by double-click: the working directory is wherever the
-                // shell happened to put us, which is never what the user meant, so
-                // ask which folder to browse.
-                None => ask_for_folder(handle, true),
-            }
-            // Nothing to ask on a phone: there is no argv, and the picker that
-            // would stand in for it needs a per-directory grant this shell does
-            // not request yet. The app's own storage is the one place that is
-            // readable without asking anyone, so that is the root. It starts
-            // empty, which is a true thing to show rather than a failure.
-            #[cfg(mobile)]
-            match app_storage_dir(&handle) {
-                Some(dir) => open_root(&handle, dir, true),
-                None => fail(&handle, "This device gave the app no storage.", true),
+                // Including on a phone, where there is no argv and no picker to
+                // stand in for it: app storage is a Place on that page, one tap
+                // away, instead of the root nobody chose.
+                None => {
+                    if let Some(win) = handle.get_webview_window(WINDOW) {
+                        show(&win);
+                    }
+                }
             }
             Ok(())
         })
@@ -275,16 +274,6 @@ fn first_dir_arg<I: Iterator<Item = String>>(args: I) -> Option<PathBuf> {
     args.filter(|a| !a.starts_with('-'))
         .map(PathBuf::from)
         .find_map(|p| p.canonicalize().ok().filter(|p| p.is_dir()))
-}
-
-/// Somewhere for the server to point while the picker is up, so the window can
-/// be built before there is a folder to show in it. Never rendered visibly.
-fn placeholder_root(app: &AppHandle) -> PathBuf {
-    app.path()
-        .home_dir()
-        .ok()
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(std::env::temp_dir)
 }
 
 /// Where to open the picker: the newest Recent that names a local path, if it
@@ -442,7 +431,9 @@ fn serve_root(app: &AppHandle, dir: PathBuf, remember: bool) {
         return;
     }
 
-    match start(app, dir) {
+    // The server is up from the moment the app is, so re-rooting is the only
+    // thing that ever happens here; there is no first-folder special case left.
+    match start(app) {
         Ok(()) => {
             if let Some(win) = app.get_webview_window(WINDOW) {
                 show(&win);
@@ -695,13 +686,22 @@ fn show(win: &tauri::WebviewWindow) {
     let _ = win.set_focus();
 }
 
-fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
+/// Brings up the server and the window, with nothing open.
+///
+/// Whoever has a folder opens it after this — from argv, from the picker, from a
+/// Place. The window is built either way, because the page that says what there
+/// is to open is a page like any other.
+fn start(app: &AppHandle) -> Result<(), String> {
     let ext = Arc::clone(&app.state::<SharedExt>().0);
-    let mut cfg = Config::new(root.clone());
+    let mut cfg = Config::rootless();
     // Turns on the page's own chooser: path bar, history buttons, Places,
     // Recent and the picker button. Only ever set here — a server reachable by
     // anything but this window has no business offering them.
     cfg.app_ui = true;
+    // And whether that chooser can ask this platform for a folder at all.
+    cfg.picker = cfg!(desktop);
+    // The name on the start page, which has no folder to be named after.
+    cfg.app_name = Some(env!("CARGO_PKG_NAME").to_string());
     cfg.places = places(app)
         .into_iter()
         .map(|(label, dir)| (label, treeserve::util::display_path(&dir)))
@@ -720,7 +720,7 @@ fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
     let entry = format!("{origin}/");
     // Before the state is handed over: the window is built after that, and this is
     // the last moment its title can be read from the config that carries it.
-    let title = window_title(&state.cfg, &treeserve::util::display_path(&root));
+    let title = window_title(&state.cfg);
     app.manage(Serving {
         state,
         origin: origin.clone(),
@@ -754,8 +754,7 @@ fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
                 && origin_allowed(&shell, payload.url())
                 && let Some(serving) = app.try_state::<Serving>()
             {
-                let cfg = &serving.state().cfg;
-                let _ = win.set_title(&window_title(cfg, &cfg.root().id));
+                let _ = win.set_title(&window_title(&serving.state().cfg));
             }
         }
     })
@@ -1008,7 +1007,9 @@ fn save_as(app: &AppHandle, url: &tauri::Url) -> bool {
     let Some(serving) = app.try_state::<Serving>() else {
         return false;
     };
-    let root = serving.state().cfg.root();
+    let Some(root) = serving.state().cfg.root() else {
+        return false;
+    };
     let Ok(target) = treeserve::resolve_in_root(root.vfs.as_ref(), url.path()) else {
         return false;
     };
@@ -1290,14 +1291,18 @@ fn places(app: &AppHandle) -> Vec<(String, PathBuf)> {
 
 /// The window's title for a page the tree served: what the root is called, if
 /// whoever re-rooted said, and otherwise the folder it ends in.
-fn window_title(cfg: &Config, root_id: &str) -> String {
+fn window_title(cfg: &Config) -> String {
+    let Some(root) = cfg.root() else {
+        // Nothing open: the app is all there is to name.
+        return "treesight".to_string();
+    };
     if let Some(name) = cfg.root_name() {
         return format!("{name} — treesight");
     }
-    match treeserve::leaf_of(root_id) {
+    match treeserve::leaf_of(&root.id) {
         Some(name) => format!("{name} — treesight"),
         // A drive or a share: no last component, so say which one it is.
-        None => format!("{root_id} — treesight"),
+        None => format!("{} — treesight", root.id),
     }
 }
 

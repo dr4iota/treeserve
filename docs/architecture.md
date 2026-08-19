@@ -213,6 +213,28 @@ network cannot freeze the window for the length of the transfer. A failure
 comes back through `run_on_main_thread`. Permission bits from `Meta.mode` are
 restored on Unix.
 
+### Nothing open
+
+`Config::root()` is `Option<Arc<Root>>`. `Config::rootless()` is where the shell
+starts; `Config::new(dir)` is the CLI's, and re-rooting fills the slot in.
+
+While it is `None`, `handle` answers `/` with `page::start_page` and redirects
+everything else there — a URL from before the folder was closed is history, not
+an error. `start_page` and `/.ts/wait` are drawn by `rootless_page`, a skeleton
+of its own rather than `layout` with the parts switched off: crumbs, the pane
+flag, line numbers and the path in the footer are all about a root, and a header
+full of controls for a folder nobody chose is chrome pretending. What stays is
+the name (`Config::app_name`, the embedder's, since this crate's own is a
+library), the theme control, and the way in.
+
+The start page's three lists — Places, embedder sections, Recent — are built from
+the same `Row`/`root_list` renderer the pane uses, so the rows, their greying and
+their buttons are decided in one place. It shows **no pane**: a sidebar of
+shortcuts beside a page of the same shortcuts is one list twice, and the pane
+earns its place once there is a tree in it. `Config::picker` says whether this
+platform can be asked for a folder at all; where it cannot, the page names the
+Places instead of drawing a dead button.
+
 ### Re-root
 
 `open_root` canonicalizes off the UI thread (a dead mapped drive can sit

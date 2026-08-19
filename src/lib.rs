@@ -152,7 +152,7 @@ pub struct Config {
     /// The served root: its identity and the backend that answers for it.
     /// Behind a lock so an embedder can re-root a running server; the CLI
     /// never changes it.
-    root: RwLock<Arc<Root>>,
+    root: RwLock<Option<Arc<Root>>>,
     /// Site title. `None` means "name of the served directory", which follows
     /// the root when it changes.
     title: Option<String>,
@@ -211,8 +211,20 @@ pub struct Config {
 impl Config {
     /// Config with library defaults, matching the CLI's own defaults.
     pub fn new(root: PathBuf) -> Config {
+        let cfg = Config::rootless();
+        cfg.set_root(root);
+        cfg
+    }
+
+    /// A server with nothing open yet.
+    ///
+    /// The shell starts here now: it opens a folder when it is given one and
+    /// otherwise shows what there is to open, rather than putting a modal picker
+    /// in front of a window nobody has seen. Every page that needs a root asks
+    /// for one and finds `None`; `handle` answers those with the start page.
+    pub fn rootless() -> Config {
         Config {
-            root: RwLock::new(Arc::new(Root::local(root))),
+            root: RwLock::new(None),
             title: None,
             #[cfg(feature = "http")]
             bind: "127.0.0.1".to_string(),
@@ -237,8 +249,10 @@ impl Config {
         }
     }
 
-    pub fn root(&self) -> Arc<Root> {
-        Arc::clone(&self.root.read().expect("root lock"))
+    /// The root being served, if one is. `None` is a state, not a failure: it is
+    /// what a window looks like before anybody has chosen a folder.
+    pub fn root(&self) -> Option<Arc<Root>> {
+        self.root.read().expect("root lock").clone()
     }
 
     /// Re-roots a running server onto a local directory. The path should
@@ -256,7 +270,7 @@ impl Config {
     /// the window would still be called after the folder before it.
     pub fn set_root_vfs(&self, root: Root) {
         self.set_root_name(None);
-        *self.root.write().expect("root lock") = Arc::new(root);
+        *self.root.write().expect("root lock") = Some(Arc::new(root));
     }
 
     pub fn recent(&self) -> Arc<Vec<String>> {
@@ -297,8 +311,17 @@ impl Config {
         self.status.write().expect("status lock").insert(id, status);
     }
 
+    /// The site title as of now. Rootless, that is the product's own name — there
+    /// is no folder to be named after yet.
     pub fn title(&self) -> String {
-        self.title_for(&self.root())
+        match self.root() {
+            Some(root) => self.title_for(&root),
+            None => self
+                .title
+                .clone()
+                .or_else(|| self.app_name.clone())
+                .unwrap_or_else(|| env!("CARGO_PKG_NAME").to_string()),
+        }
     }
 
     /// The site title for a root the caller already holds — so one request
@@ -652,10 +675,24 @@ pub fn handle(state: &State, req: &Req) -> Reply {
         // served on its own this is a page about nothing.
         "/.ts/wait" if state.cfg.app_ui => {
             let path = query_get(&query, "path").unwrap_or_default();
-            return html_reply(200, page::wait_page(state, &root, prefs, &url_now, path));
+            return html_reply(
+                200,
+                page::wait_page(state, root.as_deref(), prefs, &url_now, path),
+            );
         }
         _ => {}
     }
+
+    // Nothing open. The start page says what there is to open; every other path
+    // is a URL from before there was nothing — history, a bookmark, a reload
+    // after the folder was closed — and goes to the one page that exists rather
+    // than to an error about a root that is not the point.
+    let Some(root) = root else {
+        if path_raw == "/" {
+            return html_reply(200, page::start_page(state, prefs, &url_now));
+        }
+        return Reply::empty(302).with("Location", "/");
+    };
 
     // Decode and sanitize the served path.
     let (rel, canon) = match resolve_in_root(root.vfs.as_ref(), &path_raw) {
@@ -1072,6 +1109,39 @@ mod tests {
 
     /// `leaf_of` must answer what `Path::file_name` answered when a RootId
     /// was a `PathBuf`, across the shapes a canonicalized root can take.
+    /// With nothing open, one page exists and every other path leads to it — a
+    /// URL from before the folder was closed is history, not an error.
+    #[test]
+    fn nothing_open_means_one_page_and_a_way_back_to_it() {
+        let state = super::state_for(super::Config::rootless());
+        let get = |url: &str| {
+            super::handle(
+                &state,
+                &super::Req {
+                    url: url.to_string(),
+                    headers: vec![("Accept".to_string(), "text/html".to_string())],
+                    is_get: true,
+                },
+            )
+        };
+
+        let start = get("/");
+        assert_eq!(start.status, 200);
+        match start.body {
+            super::Body::Text(t) => assert!(t.contains("class=\"app nothing\""), "{t}"),
+            _ => panic!("a page is text"),
+        }
+
+        let stale = get("/src/main.rs");
+        assert_eq!(stale.status, 302);
+        assert!(stale
+            .headers
+            .contains(&("Location".to_string(), "/".to_string())));
+
+        // The stylesheet still answers: the start page is drawn with it.
+        assert_eq!(get("/.ts/app.css").status, 200);
+    }
+
     /// The id a remote root is filed under, for the header to show beside a path
     /// that could be on any machine. A local path has none, whatever colons it
     /// happens to contain.

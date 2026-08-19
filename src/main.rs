@@ -157,7 +157,9 @@ fn parse_args() -> Config {
 fn main() {
     let cfg = parse_args();
     let addr = format!("{}:{}", cfg.bind, cfg.port);
-    let root = cfg.root().id.clone();
+    // The CLI always has one: a path from the command line, or the working
+    // directory. `rootless` is the shell's state, not this one's.
+    let root = cfg.root().map(|r| r.id.clone()).unwrap_or_default();
     let serving = treeserve::spawn(cfg).unwrap_or_else(|e| {
         eprintln!("error: cannot bind {}: {}", addr, e);
         exit(1);

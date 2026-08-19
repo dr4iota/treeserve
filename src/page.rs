@@ -493,6 +493,60 @@ fn head_and_header(
     )
 }
 
+/// A page with no root behind it: the start page, and the wait page on the way
+/// to a first folder.
+///
+/// Its own skeleton rather than `layout` with everything switched off. What the
+/// header carries — crumbs, the pane flag, line numbers, the path in the footer —
+/// is all about a root, and a header full of controls for a folder nobody has
+/// chosen is chrome pretending there is something to do with it. What stays is
+/// the name, the theme, and the way in.
+fn rootless_page(state: &State, prefs: Prefs<'_>, url_now: &str, content: &str) -> String {
+    let mut controls = String::new();
+    let (mark, why) = theme_icon(prefs.theme);
+    controls.push_str(&flag(
+        "",
+        &set_href("theme", prefs.theme.next().as_str(), url_now),
+        &svg_icon(mark),
+        &format!("Theme: {}", prefs.theme.as_str()),
+        why,
+    ));
+    let data_theme = match prefs.theme {
+        ThemeMode::Auto => String::new(),
+        m => format!(" data-theme=\"{}\"", m.as_str()),
+    };
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en"{data_theme}>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%234c8dff' stroke-width='1.4' stroke-linejoin='round'><path d='M1.7 4.5c0-.5.4-.9.9-.9h2.9l1.3 1.7h7c.5 0 .9.4.9.9v6.4c0 .5-.4.9-.9.9H2.6a.9.9 0 01-.9-.9V4.5z'/></svg>">
+<link rel="stylesheet" href="/.ts/app.css">
+</head>
+<body class="app nothing">
+<header>
+  <div class="crumbs">{name}</div>
+  <div class="controls">{controls}</div>
+</header>
+<main>
+{content}
+</main>
+<footer><span class="where"><span class="app">{pkg} v{version}</span></span></footer>
+</body>
+</html>
+"#,
+        data_theme = data_theme,
+        title = html_escape(&state.cfg.title()),
+        name = html_escape(&state.cfg.title()),
+        controls = controls,
+        content = content,
+        pkg = env!("CARGO_PKG_NAME"),
+        version = env!("CARGO_PKG_VERSION"),
+    )
+}
+
 /// Full page shell. `rel` is the current path segments, `url_now` the raw
 /// (still percent-encoded) path+query of this request, used for toggles.
 pub fn layout(
@@ -1181,14 +1235,105 @@ pub fn listing_text(state: &State, vfs: &dyn Vfs, path: &VfsPath) -> String {
 /// shell does it on a thread and parks the window here meanwhile. Still the served
 /// root's page furniture, because that is still what is being served: only the
 /// middle of the window is waiting.
-pub fn wait_page(state: &State, root: &Root, prefs: Prefs<'_>, url_now: &str, path: &str) -> String {
+pub fn wait_page(
+    state: &State,
+    root: Option<&Root>,
+    prefs: Prefs<'_>,
+    url_now: &str,
+    path: &str,
+) -> String {
     let content = format!(
         "<div class=\"bigmsg\"><p>Opening {}&hellip;</p>\
          <p>If the folder is on a drive or a share that is not answering, this waits \
          for as long as that takes to find out.</p></div>",
         html_escape(path)
     );
-    layout(state, root, prefs, &[], url_now, "", false, &content)
+    // The first folder of the session is opened from the start page, where there
+    // is no root yet — so this page has to be drawable without one.
+    match root {
+        Some(root) => layout(state, root, prefs, &[], url_now, "", false, &content),
+        None => rootless_page(state, prefs, url_now, &content),
+    }
+}
+
+/// What there is to open, when nothing is.
+///
+/// The lists are the pane's, in the pane's own markup and out of the same
+/// renderer — a start page that drew its own version of Places would be a second
+/// version to keep in step. What it does not have is the pane: a sidebar of
+/// shortcuts beside a page of the same shortcuts is the same list twice, and the
+/// pane earns its place once there is a tree in it.
+pub fn start_page(state: &State, prefs: Prefs<'_>, url_now: &str) -> String {
+    let mut lists = String::from("<div class=\"start\">");
+    root_list(
+        &mut lists,
+        state,
+        "places",
+        "Places",
+        None,
+        state.cfg.places.iter().map(|(l, p)| Row {
+            label: Some(l),
+            id: p,
+            action: "/.ts/place",
+            aside: &[],
+        }),
+    );
+    for sec in state.cfg.sections().iter() {
+        root_list(
+            &mut lists,
+            state,
+            &sec.class,
+            &sec.heading,
+            sec.heading_action.as_ref(),
+            sec.entries.iter().map(|e| Row {
+                label: e.label.as_deref(),
+                id: &e.id,
+                action: &e.action,
+                aside: &e.aside,
+            }),
+        );
+    }
+    let recent = state.cfg.recent();
+    let forget: Vec<[(String, String, String); 1]> = recent
+        .iter()
+        .map(|p| {
+            [(
+                format!("/.ts/forget?path={}", percent_encode(p)),
+                ICON_CROSS.to_string(),
+                "Forget this folder".to_string(),
+            )]
+        })
+        .collect();
+    root_list(
+        &mut lists,
+        state,
+        "recent",
+        "Recent",
+        None,
+        recent.iter().zip(&forget).map(|(p, aside)| Row {
+            label: None,
+            id: p,
+            action: "/.ts/root",
+            aside,
+        }),
+    );
+    lists.push_str("</div>");
+
+    let intro = format!(
+        "<div class=\"intro\"><p>Browse a folder as a tree: files beside their \
+         contents, and nothing installed on whatever machine you are reading \
+         from.</p>{}</div>",
+        match state.cfg.picker {
+            true => format!(
+                "<p><a class=\"open\" href=\"/.ts/open\">{} Open a folder&hellip;</a></p>",
+                svg_icon(ICON_FOLDER)
+            ),
+            // A platform whose folder picker we cannot ask: the lists are the way
+            // in, and saying so beats offering a button that does nothing.
+            false => "<p class=\"hint\">Open one of the places below to start.</p>".to_string(),
+        }
+    );
+    rootless_page(state, prefs, url_now, &format!("{intro}{lists}"))
 }
 
 pub fn error_page(
@@ -1256,7 +1401,7 @@ mod tests {
         let cur = vec!["here".to_string()];
         let shut = Prefs { sidebar: true, ..prefs() };
         let page = |prefs: Prefs<'_>| {
-            let root = state.cfg.root();
+            let root = state.cfg.root().expect("these tests always serve one");
             listing_page(&state, &root, prefs, &cur, &VfsPath::new(cur.clone()), &[], "/here/")
         };
 
@@ -1287,6 +1432,55 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// The page a window opens on when nothing has been opened in it: what there
+    /// is to open, and no tree — the pane's lists are the page here, and a pane
+    /// beside them would be the same list twice.
+    #[test]
+    fn the_start_page_offers_what_there_is_to_open() {
+        let dir = tmp_dir("start");
+        let mut state = state_at(dir.clone());
+        state.cfg.app_ui = true;
+        state.cfg.picker = true;
+        state.cfg.places = vec![("Home".to_string(), "/home/x".to_string())];
+        state.cfg.set_recent(vec!["ssh:iota:/home/hanhua".to_string()]);
+        state.cfg.set_sections(vec![PaneSection {
+            class: "servers".to_string(),
+            heading: "Servers".to_string(),
+            heading_action: Some((
+                "/x/manage".to_string(),
+                ICON_PLUS.to_string(),
+                "Manage".to_string(),
+            )),
+            entries: vec![PaneEntry {
+                label: Some("Iota".to_string()),
+                id: "ssh:iota:~".to_string(),
+                action: "/x/open".to_string(),
+                aside: Vec::new(),
+            }],
+        }]);
+        // Rootless: this page is what `handle` answers with when `cfg.root()` is
+        // None, and it must not need one to draw.
+        state.cfg.set_root_name(None);
+        let html = start_page(&state, prefs(), "/");
+
+        assert!(html.contains("<body class=\"app nothing\">"), "{html}");
+        assert!(!html.contains("<nav class=\"tree\">"), "no pane on this page");
+        assert!(html.contains("href=\"/.ts/open\""), "the way in");
+        for want in ["Places", "Servers", "Recent", "Home", "Iota", "/x/manage"] {
+            assert!(html.contains(want), "missing {want} in {html}");
+        }
+        // The lists are the pane's rows, so a Recent still offers to be forgotten.
+        assert!(html.contains("/.ts/forget?path="), "{html}");
+
+        // No picker on this platform: say so instead of drawing a dead button.
+        state.cfg.picker = false;
+        let html = start_page(&state, prefs(), "/");
+        assert!(!html.contains("href=\"/.ts/open\""), "{html}");
+        assert!(html.contains("Open one of the places below"), "{html}");
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// A remote listing says which machine it is from. `/home/hanhua` is a path
     /// every host has a version of, and the pane's Servers list only says which
     /// one you *clicked*, not which one you are looking at now.
@@ -1297,14 +1491,14 @@ mod tests {
         state.cfg.app_ui = true;
         let prefs = Prefs { sidebar: true, ..prefs() };
         let page = |state: &State| {
-            let root = state.cfg.root();
+            let root = state.cfg.root().expect("these tests always serve one");
             listing_page(state, &root, prefs, &[], &VfsPath::root(), &[], "/")
         };
 
         // A local root has no id to show, and shows none.
         assert!(!page(&state).contains("class=\"tag\""), "local root");
 
-        let local = state.cfg.root();
+        let local = state.cfg.root().expect("these tests always serve one");
         state.cfg.set_root_vfs(Root {
             id: "ssh:iota:/home/hanhua".to_string(),
             vfs: std::sync::Arc::clone(&local.vfs),
@@ -1328,7 +1522,7 @@ mod tests {
         state.cfg.places = vec![("Home".to_string(), "/home/x".to_string())];
         state.cfg.set_recent(vec!["ssh:iota:/home/hanhua/~".to_string()]);
         let prefs = Prefs { sidebar: true, ..prefs() };
-        let root = state.cfg.root();
+        let root = state.cfg.root().expect("these tests always serve one");
         let html = listing_page(&state, &root, prefs, &[], &VfsPath::root(), &[], "/");
 
         let button = concat!(
@@ -1381,7 +1575,7 @@ mod tests {
         let prefs = Prefs { sidebar: true, ..prefs() };
 
         let page = |state: &State| {
-            let root = state.cfg.root();
+            let root = state.cfg.root().expect("these tests always serve one");
             listing_page(state, &root, prefs, &[], &VfsPath::root(), &[], "/")
         };
 
@@ -1433,7 +1627,7 @@ mod tests {
         fs::write(dir.join("README.md"), "# Hello listing\n\nA note.\n").unwrap();
         fs::write(dir.join("a.rs"), "fn main() {}\n").unwrap();
         let state = state_at(dir.clone());
-        let root = state.cfg.root();
+        let root = state.cfg.root().expect("these tests always serve one");
         let html = listing_page(&state, &root, prefs(), &[], &VfsPath::root(), &[], "/");
         let _ = fs::remove_dir_all(&dir);
         assert!(html.contains("listing-readme"), "{html}");
@@ -1446,7 +1640,7 @@ mod tests {
         let dir = tmp_dir("readme-q");
         fs::write(dir.join("README.md"), "# Should not appear\n").unwrap();
         let state = state_at(dir.clone());
-        let root = state.cfg.root();
+        let root = state.cfg.root().expect("these tests always serve one");
         let html = listing_page(
             &state,
             &root,

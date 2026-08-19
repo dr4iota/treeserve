@@ -237,8 +237,16 @@ cargo run -p treesight -- [FOLDER]     # dev run
 
 - **Started with a folder** (argument, shell verb, drag onto the exe) it serves
   it right away. **Started without one** — the normal double-click case, where
-  the working directory is whatever the shell happened to pick — it opens a
-  native folder picker instead of guessing; cancelling quits.
+  the working directory is whatever the shell happened to pick — it opens on the
+  **start page**: what there is to open, being Places, whatever an embedder
+  added, and Recent, with a button for the folder picker. Nothing is served
+  until something is chosen, and no modal stands in front of a window nobody has
+  seen yet.
+- **Nothing open is a state**, not a failure: `Config::root()` is an `Option`, the
+  start page is what `handle` answers with while it is `None`, and any other path
+  redirects there rather than erroring about a root that is not the point. The
+  pane's **Files** section — the tree and the folder picker on its heading — is
+  absent until there is a folder in it.
 - The window opens on `treesight://localhost/`, a URI scheme the app registers
   and answers itself — no socket, no port, nothing for another process on the
   machine to reach. Cookies, redirects, Range requests and relative links work
