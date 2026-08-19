@@ -1134,11 +1134,15 @@ fn set_pref(app: &AppHandle, url: &tauri::Url) {
     let Some(jar) = app.try_state::<JarState>() else {
         return;
     };
+    // The jar goes in, not just out: `/.ts/tree` changes one entry of a set it
+    // reads from the `Cookie`, and with no cookie to read it wrote a set of one —
+    // so opening a directory quietly shut every other one, and a second level
+    // could never appear. `/.ts/set` never noticed, its keys being independent.
     let reply = treeserve::handle(
         serving.state(),
         &treeserve::Req {
             url: path_and_query(url),
-            headers: Vec::new(),
+            headers: with_jar(Vec::new(), &jar.0),
             is_get: true,
         },
     );
@@ -1458,6 +1462,23 @@ mod tests {
         assert!(!after.contains("<nav"), "pane should be gone");
 
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// What `set_pref` hands the router. A route that changes one entry of a set
+    /// it reads from the `Cookie` — `/.ts/tree` — gets nothing right without this,
+    /// and gets it wrong quietly: it writes back a set of one.
+    #[test]
+    fn a_route_the_shell_answers_is_given_the_jar() {
+        let jar = Jar::default();
+        jar.store(&treeserve::Reply {
+            status: 303,
+            headers: vec![("Set-Cookie".into(), "ts_open=src|src%2Fbin".into())],
+            body: treeserve::Body::Empty,
+        });
+        assert_eq!(
+            with_jar(Vec::new(), &jar),
+            vec![("Cookie".to_string(), "ts_open=src|src%2Fbin".to_string())]
+        );
     }
 
     /// Both jars holding an answer is a Windows shape: its own store kept what
