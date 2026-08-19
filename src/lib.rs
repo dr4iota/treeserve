@@ -517,11 +517,12 @@ fn text_etag(body: &str) -> String {
     format!("\"{:x}\"", hasher.finish())
 }
 
-fn prefs_from(state: &State, req: &Req) -> Prefs {
+fn prefs_from<'a>(state: &State, req: &Req, open: &'a [String]) -> Prefs<'a> {
     let mut prefs = Prefs {
         theme: state.cfg.theme,
         ln: state.cfg.ln,
         sidebar: state.cfg.sidebar,
+        open,
     };
     for value in req.named("Cookie") {
         for (k, v) in parse_cookies(value) {
@@ -570,7 +571,9 @@ pub fn handle(state: &State, req: &Req) -> Reply {
         None => (url_now.clone(), String::new()),
     };
     let query = parse_query(&query_raw);
-    let prefs = prefs_from(state, req);
+    // Owned here so `Prefs` can borrow it and stay `Copy` for every renderer.
+    let open = open_from(req);
+    let prefs = prefs_from(state, req, &open);
     // One snapshot of the served root for the whole request, so a re-root
     // mid-request cannot hand half a page one tree and half another.
     let root = state.cfg.root();
@@ -582,6 +585,7 @@ pub fn handle(state: &State, req: &Req) -> Reply {
         "/.ts/syntax-light.css" => return css_reply(req, &state.hl.css_light),
         "/.ts/syntax-dark.css" => return css_reply(req, &state.hl.css_dark),
         "/.ts/set" => return set_prefs(&query),
+        "/.ts/tree" => return toggle_open(req, &query),
         // Somewhere for the shell to park the window while it finds out whether a
         // folder opens. Only it ever navigates here, and only when `app_ui` is on;
         // served on its own this is a page about nothing.
@@ -680,6 +684,87 @@ fn back_target(query: &[(String, String)]) -> String {
         .filter(|b| b.starts_with('/') && !b.starts_with("//"))
         .unwrap_or("/")
         .to_string()
+}
+
+/// How many directories the pane will hold open at once, and how many bytes of
+/// cookie that is allowed to cost.
+///
+/// Every one of them is a `read_dir` on every render — a network round trip where
+/// the backend is remote — so this is a budget, not a limit anybody should reach.
+/// The byte cap is the one that actually binds: paths are long, cookies are a few
+/// KB, and a cookie a browser quietly drops is a pane that forgets everything.
+const OPEN_MAX: usize = 24;
+const OPEN_COOKIE_MAX: usize = 3000;
+
+/// The `ts_open` cookie: relative paths, percent-encoded, `|`-joined.
+///
+/// `|` needs no meaning of its own — `percent_encode` leaves only unreserved
+/// characters alone, so a path can never contain the separator.
+fn open_from(req: &Req) -> Vec<String> {
+    for value in req.named("Cookie") {
+        for (k, v) in parse_cookies(value) {
+            if k == "ts_open" {
+                return v.split('|').filter_map(open_path).take(OPEN_MAX).collect();
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// One entry, as the tree keys them: percent-decoded, no leading or trailing
+/// slash, and nothing that could climb out of the root. `resolve_in_root` guards
+/// what gets *served*; this guards what gets walked to draw the pane.
+fn open_path(raw: &str) -> Option<String> {
+    let path = percent_decode(raw.trim()).trim_matches('/').to_string();
+    let sane = !path.is_empty()
+        && !path.contains('\0')
+        && !path
+            .split('/')
+            .any(|seg| seg.is_empty() || seg == "." || seg == "..");
+    sane.then_some(path)
+}
+
+/// The cookie value, oldest entries dropped until it fits. Newest last, so what
+/// goes is what was opened longest ago.
+fn open_cookie(open: &[String]) -> String {
+    let mut from = 0;
+    loop {
+        let value = open[from..]
+            .iter()
+            .map(|p| percent_encode(p))
+            .collect::<Vec<_>>()
+            .join("|");
+        if value.len() <= OPEN_COOKIE_MAX || from + 1 >= open.len() {
+            return value;
+        }
+        from += 1;
+    }
+}
+
+/// `/.ts/tree?open=src/bin&back=/src/` — and `shut=` for the same trip the other
+/// way. Read the set, change one entry, write it back: the direction is in the
+/// link because a plain toggle is wrong the second time it is followed, which is
+/// exactly what a double click and a reload both do.
+fn toggle_open(req: &Req, query: &[(String, String)]) -> Reply {
+    let mut open = open_from(req);
+    if let Some(path) = query_get(query, "shut").and_then(open_path) {
+        open.retain(|p| *p != path);
+    }
+    if let Some(path) = query_get(query, "open").and_then(open_path)
+        && !open.contains(&path)
+    {
+        // The oldest goes rather than the newest being refused: the reader just
+        // asked for this one, and something has to leave.
+        if open.len() >= OPEN_MAX {
+            open.remove(0);
+        }
+        open.push(path);
+    }
+    let mut reply = Reply::empty(303);
+    reply
+        .headers
+        .push(cookie_header("ts_open", &open_cookie(&open)));
+    reply.with("Location", &back_target(query))
 }
 
 /// `/.ts/set?theme=dark&ln=1&sidebar=0&back=/some/where` — store prefs in
@@ -847,7 +932,82 @@ fn serve_raw(req: &Req, vfs: &dyn Vfs, path: &VfsPath, name: &str, attachment: b
 
 #[cfg(test)]
 mod tests {
-    use super::{leaf_of, root_id_is_local};
+    use super::{leaf_of, open_cookie, open_from, open_path, root_id_is_local, toggle_open, Req};
+    use super::{parse_query, OPEN_MAX};
+
+    fn req(cookie: &str) -> Req {
+        Req {
+            url: "/".to_string(),
+            headers: match cookie.is_empty() {
+                true => Vec::new(),
+                false => vec![("Cookie".to_string(), format!("ts_open={cookie}"))],
+            },
+            is_get: true,
+        }
+    }
+
+    fn set_cookie(reply: &super::Reply) -> String {
+        reply
+            .headers
+            .iter()
+            .find(|(k, _)| k == "Set-Cookie")
+            .map(|(_, v)| v.split(';').next().unwrap_or_default().to_string())
+            .expect("a cookie")
+    }
+
+    /// What may be walked to draw the pane. `resolve_in_root` guards what is
+    /// served; this list is walked before any of that runs.
+    #[test]
+    fn an_open_entry_cannot_climb_out_of_the_root() {
+        assert_eq!(open_path("src/bin"), Some("src/bin".to_string()));
+        assert_eq!(open_path("/src/"), Some("src".to_string()));
+        assert_eq!(open_path("a%20b"), Some("a b".to_string()));
+        assert_eq!(open_path(".."), None);
+        assert_eq!(open_path("src/../../etc"), None);
+        assert_eq!(open_path("src//bin"), None);
+        assert_eq!(open_path("  "), None);
+    }
+
+    #[test]
+    fn the_open_set_survives_the_cookie() {
+        let open = vec!["a b".to_string(), "c/d".to_string()];
+        let value = open_cookie(&open);
+        assert_eq!(value, "a%20b|c%2Fd");
+        assert_eq!(open_from(&req(&value)), open);
+    }
+
+    /// One entry changes per trip, and the direction is in the link so following
+    /// it twice — a double click, a reload — lands in the same place.
+    #[test]
+    fn a_trip_through_the_tree_route_changes_one_entry() {
+        let open = |q: &str, cookie: &str| {
+            let reply = toggle_open(&req(cookie), &parse_query(q));
+            assert_eq!(reply.status, 303);
+            (set_cookie(&reply), reply)
+        };
+
+        let (cookie, reply) = open("open=src&back=/here/", "");
+        assert_eq!(cookie, "ts_open=src");
+        assert!(reply.headers.contains(&("Location".to_string(), "/here/".to_string())));
+        // Again, same answer: nothing is toggled off by being asked for twice.
+        assert_eq!(open("open=src&back=/", "src").0, "ts_open=src");
+        assert_eq!(open("open=docs/img&back=/", "src").0, "ts_open=src|docs%2Fimg");
+        assert_eq!(open("shut=src&back=/", "src|docs%2Fimg").0, "ts_open=docs%2Fimg");
+        // A path that could climb out is not stored, and does not disturb the set.
+        assert_eq!(open("open=../etc&back=/", "src").0, "ts_open=src");
+    }
+
+    /// The set is a budget: every entry is a `read_dir` per render. What goes is
+    /// what was opened longest ago, because the newest is the one just asked for.
+    #[test]
+    fn the_oldest_open_directory_makes_room_for_a_new_one() {
+        let full: Vec<String> = (0..OPEN_MAX).map(|i| format!("d{i}")).collect();
+        let reply = toggle_open(&req(&open_cookie(&full)), &parse_query("open=late&back=/"));
+        let stored = open_from(&req(set_cookie(&reply).trim_start_matches("ts_open=")));
+        assert_eq!(stored.len(), OPEN_MAX);
+        assert_eq!(stored.first().map(String::as_str), Some("d1"));
+        assert_eq!(stored.last().map(String::as_str), Some("late"));
+    }
 
     /// `leaf_of` must answer what `Path::file_name` answered when a RootId
     /// was a `PathBuf`, across the shapes a canonicalized root can take.

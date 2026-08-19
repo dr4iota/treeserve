@@ -75,7 +75,7 @@ fn meta_line(size: u64, mtime: Option<std::time::SystemTime>, extra: &str) -> St
 /// viewer's wrapping, the PDF viewer, an image at its own size — and none of the
 /// furniture the other views put around their content, since none of it is the
 /// file. What the header says and what a flag does is ours; the rest is not.
-pub fn raw_page(state: &State, root: &Root, prefs: Prefs, rel: &[String], url_now: &str) -> String {
+pub fn raw_page(state: &State, root: &Root, prefs: Prefs<'_>, rel: &[String], url_now: &str) -> String {
     let name = rel.last().map(String::as_str).unwrap_or("");
     let base = href_path(rel);
     // The way out is the way in reversed: where every other view offers Raw,
@@ -109,7 +109,7 @@ pub fn raw_page(state: &State, root: &Root, prefs: Prefs, rel: &[String], url_no
 pub fn file_page(
     state: &State,
     root: &Root,
-    prefs: Prefs,
+    prefs: Prefs<'_>,
     rel: &[String],
     canon: &VfsPath,
     query: &[(String, String)],

@@ -1085,15 +1085,15 @@ fn shell_action(app: &AppHandle, url: &tauri::Url) -> bool {
         // print rules are what makes the result worth looking at — no header, no
         // status line, no pane, and the light palette whatever is on screen.
         "/.ts/print" => eval(app, "window.print()"),
-        // The theme / line-number / pane toggles. `/.ts/set` answers
-        // 303-and-a-cookie, and a 303 is the one reply a custom scheme cannot
-        // carry out: WebKit takes the empty body and stays on the page it was
-        // showing, so a new preference only turned up on whatever page came
-        // next. Over the HTTP build the network stack followed it and the page
-        // changed under your hand, which is the behaviour to restore. What is
-        // stored is still the router's call — only going back to the page is
-        // this side's.
-        "/.ts/set" => set_pref(app, url),
+        // The theme / line-number / pane toggles, and the tree's disclosure
+        // arrows. Both answer 303-and-a-cookie, and a 303 is the one reply a
+        // custom scheme cannot carry out: WebKit takes the empty body and stays
+        // on the page it was showing, so a new preference only turned up on
+        // whatever page came next. Over the HTTP build the network stack
+        // followed it and the page changed under your hand, which is the
+        // behaviour to restore. What is stored is still the router's call — only
+        // going back to the page is this side's.
+        "/.ts/set" | "/.ts/tree" => set_pref(app, url),
         // A Recent row's own button. Nothing to open and nothing to wait for, so
         // unlike its neighbours this one answers here and reloads: the pane is
         // part of the page, and the row has to leave it.
@@ -1126,7 +1126,7 @@ fn shell_action(app: &AppHandle, url: &tauri::Url) -> bool {
     true
 }
 
-/// Stores what `/.ts/set` asked for and puts the page back on screen.
+/// Stores what a preference route asked for and puts the page back on screen.
 fn set_pref(app: &AppHandle, url: &tauri::Url) {
     let Some(serving) = app.try_state::<Serving>() else {
         return;

@@ -211,6 +211,17 @@ nav.tree a.dir { color: var(--link); }
    because the space is reserved either way and a column of bright arrows down a
    narrow pane is a column of arrows, not a tree. */
 nav.tree li .row { display: flex; align-items: center; }
+/* The arrow is its own control now: the name walks into a directory, the arrow
+   only opens it here. Fixed width so a column of names still lines up, and quiet
+   like the re-root button — a pane full of bright arrows reads as arrows. */
+nav.tree .row > .twisty {
+  flex: 0 0 auto;
+  width: .8rem;
+  padding: 0 0 0 .1rem;
+  color: var(--muted);
+  line-height: 1;
+}
+nav.tree .row > a.twisty:hover { color: var(--link); background: none; }
 nav.tree li .row > a.dir {
   flex: 1 1 auto;
   min-width: 0;

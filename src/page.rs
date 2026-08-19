@@ -38,10 +38,18 @@ impl ThemeMode {
 }
 
 #[derive(Clone, Copy)]
-pub struct Prefs {
+pub struct Prefs<'a> {
     pub theme: ThemeMode,
     pub ln: bool,
     pub sidebar: bool,
+    /// Directories the reader opened in the pane, `/`-joined relative paths.
+    ///
+    /// A borrow, so `Prefs` stays `Copy` and every renderer keeps taking it by
+    /// value. The chain down to the current directory is deliberately *not* in
+    /// here: that one is implied by where you are, and writing it down would mean
+    /// a walk through a tree quietly filling the cookie with everywhere you had
+    /// been — and would let a collapse hide the row you are standing in.
+    pub open: &'a [String],
 }
 
 pub fn read_dir_sorted(state: &State, vfs: &dyn Vfs, path: &VfsPath) -> Vec<Entry> {
@@ -258,7 +266,7 @@ pub(crate) fn flag(class: &str, href: &str, icon: &str, label: &str, title: &str
 fn head_and_header(
     state: &State,
     root: &Root,
-    prefs: Prefs,
+    prefs: Prefs<'_>,
     rel: &[String],
     url_now: &str,
     extra_controls: &str,
@@ -469,7 +477,7 @@ fn head_and_header(
 pub fn layout(
     state: &State,
     root: &Root,
-    prefs: Prefs,
+    prefs: Prefs<'_>,
     rel: &[String],
     url_now: &str,
     extra_controls: &str,
@@ -495,7 +503,7 @@ pub fn layout(
     // is the honest trade for a full-width listing — the picker they are
     // shortcuts to is in the status line, and that line is always on screen.
     let sidebar = if prefs.sidebar {
-        pane_html(state, root, rel)
+        pane_html(state, root, rel, prefs, url_now)
     } else {
         String::new()
     };
@@ -559,7 +567,7 @@ pub fn layout(
 pub fn bare_layout(
     state: &State,
     root: &Root,
-    prefs: Prefs,
+    prefs: Prefs<'_>,
     rel: &[String],
     url_now: &str,
     extra_controls: &str,
@@ -589,12 +597,26 @@ const TREE_MAX_PER_DIR: usize = 150;
 ///
 /// Only called when the pane is on, and then it always has its tree — the flag
 /// in the header is the pane itself, all of it or none.
-fn pane_html(state: &State, root: &Root, cur: &[String]) -> String {
+fn pane_html(
+    state: &State,
+    root: &Root,
+    cur: &[String],
+    prefs: Prefs<'_>,
+    url_now: &str,
+) -> String {
     let mut out = String::from("<nav class=\"tree\">");
     // The tree first and foremost: it is what the pane is for, and it is what
     // grows, so it takes the height and the shortcuts below settle for what is
     // left.
-    tree_dir(state, root.vfs.as_ref(), &mut Vec::new(), cur, &mut out);
+    tree_dir(
+        state,
+        root.vfs.as_ref(),
+        &mut Vec::new(),
+        cur,
+        prefs,
+        url_now,
+        &mut out,
+    );
     if state.cfg.app_ui {
         out.push_str("<div class=\"chooser\">");
         // Two paths on purpose: opening a Place is not something Recent should
@@ -817,7 +839,46 @@ fn as_root_link(state: &State, vfs: &dyn Vfs, path: &VfsPath) -> String {
     )
 }
 
-fn tree_dir(state: &State, vfs: &dyn Vfs, rel: &mut Vec<String>, cur: &[String], out: &mut String) {
+/// The disclosure arrow.
+///
+/// It used to be a character inside the name's own link, which is why clicking it
+/// walked into the directory: there was no second control there to click. Now it
+/// is its own link to `/.ts/tree`, and it says which way it means to go — a link
+/// that toggles is a link that is wrong when it is followed twice.
+///
+/// A directory on the way to the current one has no link at all. It is open
+/// because you are standing in it, and an arrow that could shut it would hide
+/// where you are.
+fn twisty(open: bool, on_path: bool, key: &str, back: &str) -> String {
+    const DOWN: &str = "&#x25BE;";
+    const RIGHT: &str = "&#x25B8;";
+    if on_path {
+        return format!("<span class=\"twisty\">{DOWN}</span>");
+    }
+    let (param, mark, what) = match open {
+        true => ("shut", DOWN, "Collapse"),
+        false => ("open", RIGHT, "Expand"),
+    };
+    format!(
+        "<a class=\"twisty\" href=\"/.ts/tree?{}={}&amp;back={}\" title=\"{} {}\">{}</a>",
+        param,
+        percent_encode(key),
+        percent_encode(back),
+        what,
+        html_escape(key),
+        mark
+    )
+}
+
+fn tree_dir(
+    state: &State,
+    vfs: &dyn Vfs,
+    rel: &mut Vec<String>,
+    cur: &[String],
+    prefs: Prefs<'_>,
+    url_now: &str,
+    out: &mut String,
+) {
     let entries = read_dir_sorted(state, vfs, &VfsPath::new(rel.clone()));
     let total = entries.len();
     out.push_str("<ul>");
@@ -828,22 +889,25 @@ fn tree_dir(state: &State, vfs: &dyn Vfs, rel: &mut Vec<String>, cur: &[String],
         let href = href_path(rel);
         let cls = if is_cur { " class=\"cur\"" } else { "" };
         if e.is_dir {
-            let arrow = if on_path { "&#x25BE;" } else { "&#x25B8;" };
+            let key = rel.join("/");
+            // Two sources, and the row is open if either says so: the chain to
+            // where you are, and the set you opened by hand.
+            let open = on_path || prefs.open.iter().any(|p| p == &key);
             let child = VfsPath::new(rel.clone());
             // The name and the button share a row of their own, so an expanded
             // directory's children hang below it rather than beside the button,
             // and a long name ellipsises against the button instead of pushing it
             // off the pane.
             out.push_str(&format!(
-                "<li{}><span class=\"row\"><a class=\"dir\" href=\"{}/\">{} {}/</a>{}</span>",
+                "<li{}><span class=\"row\">{}<a class=\"dir\" href=\"{}/\">{}/</a>{}</span>",
                 cls,
+                twisty(open, on_path, &key, url_now),
                 html_escape(&href),
-                arrow,
                 html_escape(&e.name),
                 as_root_link(state, vfs, &child)
             ));
-            if on_path {
-                tree_dir(state, vfs, rel, cur, out);
+            if open {
+                tree_dir(state, vfs, rel, cur, prefs, url_now, out);
             }
             out.push_str("</li>");
         } else {
@@ -872,7 +936,7 @@ const SEARCH_MAX_DEPTH: usize = 12;
 pub fn listing_page(
     state: &State,
     root: &Root,
-    prefs: Prefs,
+    prefs: Prefs<'_>,
     rel: &[String],
     canon: &VfsPath,
     query: &[(String, String)],
@@ -1083,7 +1147,7 @@ pub fn listing_text(state: &State, vfs: &dyn Vfs, path: &VfsPath) -> String {
 /// shell does it on a thread and parks the window here meanwhile. Still the served
 /// root's page furniture, because that is still what is being served: only the
 /// middle of the window is waiting.
-pub fn wait_page(state: &State, root: &Root, prefs: Prefs, url_now: &str, path: &str) -> String {
+pub fn wait_page(state: &State, root: &Root, prefs: Prefs<'_>, url_now: &str, path: &str) -> String {
     let content = format!(
         "<div class=\"bigmsg\"><p>Opening {}&hellip;</p>\
          <p>If the folder is on a drive or a share that is not answering, this waits \
@@ -1096,7 +1160,7 @@ pub fn wait_page(state: &State, root: &Root, prefs: Prefs, url_now: &str, path: 
 pub fn error_page(
     state: &State,
     root: &Root,
-    prefs: Prefs,
+    prefs: Prefs<'_>,
     rel: &[String],
     url_now: &str,
     code: u32,
@@ -1118,11 +1182,12 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    fn prefs() -> Prefs {
+    fn prefs() -> Prefs<'static> {
         Prefs {
             theme: ThemeMode::Light,
             ln: false,
             sidebar: false,
+            open: &[],
         }
     }
 
@@ -1144,6 +1209,48 @@ mod tests {
         ));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// The arrow is a control of its own, and it says which way it goes. The row
+    /// you are standing in has none: it is open because you are in it.
+    #[test]
+    fn an_arrow_opens_a_directory_without_walking_into_it() {
+        let dir = tmp_dir("twisty");
+        fs::create_dir_all(dir.join("here/inner")).unwrap();
+        fs::create_dir_all(dir.join("other/deep")).unwrap();
+        let state = state_at(dir.clone());
+        let cur = vec!["here".to_string()];
+        let shut = Prefs { sidebar: true, ..prefs() };
+        let page = |prefs: Prefs<'_>| {
+            let root = state.cfg.root();
+            listing_page(&state, &root, prefs, &cur, &VfsPath::new(cur.clone()), &[], "/here/")
+        };
+
+        let html = page(shut);
+        // The name is the walk-in link, and the arrow is no longer inside it.
+        assert!(html.contains("<a class=\"dir\" href=\"/other/\">other/</a>"), "{html}");
+        // A closed row offers to open, and says where to come back to.
+        assert!(
+            html.contains("<a class=\"twisty\" href=\"/.ts/tree?open=other&amp;back=%2Fhere%2F\""),
+            "{html}"
+        );
+        // Nothing under it is drawn until it is open.
+        assert!(!html.contains(">deep/</a>"), "{html}");
+        // The current directory is open with no control on it, and its child is
+        // drawn — that is the implicit chain, which no cookie carries.
+        assert!(html.contains("<span class=\"twisty\">"), "{html}");
+        assert!(html.contains(">inner/</a>"), "{html}");
+
+        // Opened by hand: the children appear, and the arrow now offers to shut.
+        let open = [String::from("other")];
+        let html = page(Prefs { open: &open, ..shut });
+        assert!(html.contains(">deep/</a>"), "{html}");
+        assert!(
+            html.contains("<a class=\"twisty\" href=\"/.ts/tree?shut=other&amp;back=%2Fhere%2F\""),
+            "{html}"
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     /// Every Recent row carries its own way out of the list, and only Recent:

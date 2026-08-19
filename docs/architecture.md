@@ -81,9 +81,9 @@ webview asks for a film a Range at a time.
    through `serve_raw` (Range, ETag). Otherwise `view::file_page`.
 
 HTML pages are `Cache-Control: no-store`. Raw bodies get an ETag from
-`(mtime, len)` in `Meta`. Theme, line numbers and sidebar are cookies
-(`ts_theme`, `ts_ln`, `ts_sidebar`), not query strings, so a shared URL
-stays shareable.
+`(mtime, len)` in `Meta`. Theme, line numbers, sidebar and the pane's opened
+directories are cookies (`ts_theme`, `ts_ln`, `ts_sidebar`, `ts_open`), not
+query strings, so a shared URL stays shareable.
 
 **The shell keeps its own cookie jar** (`Jar`, `app/src/lib.rs`), because a
 custom scheme has nowhere to keep cookies. `treesight://localhost` has an
@@ -203,8 +203,8 @@ shell's capability:
 - The controls are ordinary links (`/.ts/open`, `/.ts/root`, `/.ts/place`,
   `/.ts/back`, `/.ts/reload`, `/.ts/print`, `/.ts/forget`). **None of those is
   a server route**; the CLI 404s them. The shell's `on_navigation` cancels the
-  navigation and does the work. `/.ts/set` is a server route the shell answers
-  itself as well — see the cookie jar above.
+  navigation and does the work. `/.ts/set` and `/.ts/tree` are server routes the
+  shell answers itself as well — see the cookie jar above.
 
 `?dl=1` is intercepted the same way: `resolve_in_root`, then a native Save
 dialog (non-blocking, main thread), and the copy itself — `Vfs::open` →
@@ -234,6 +234,33 @@ page. Recent alone gets one: it is the only pane list that is a record of what
 the reader did rather than a fixture, so the only one that can hold something
 they want gone — a folder that moved, or a root some since-fixed bug wrote down
 wrong. It forgets the row and never touches the folder.
+
+### The tree pane
+
+A directory row is three controls, not one: the arrow opens it here, the name
+walks into it, and (in the shell) the button re-roots to it. The arrow used to be
+a character *inside* the name's link, so clicking it walked in — there was no
+second control to click.
+
+What is open is the **union of two sources**, kept apart on purpose:
+
+- the **implicit** chain from the root down to the current directory, which is
+  never stored: it follows from where you are, storing it would fill `ts_open`
+  with everywhere you had been, and a collapse of it could hide the row you are
+  standing in. Those arrows are inert markers with no link.
+- the **explicit** set in `ts_open`, which is every arrow you clicked.
+
+`/.ts/tree?open=<rel>` and `?shut=<rel>` each change one entry and 303 back to
+`back=`. The direction is in the link rather than being a toggle, because a
+toggle is wrong the second time it is followed — which is what a double click and
+a reload both are. `open_path` re-checks every entry on the way in and out: the
+list is walked to *draw* the pane, before `resolve_in_root` guards anything.
+
+The set is capped at `OPEN_MAX` (24) entries and `OPEN_COOKIE_MAX` (3000) bytes,
+oldest dropped first. Each entry costs one `read_dir` per render — a network
+round trip on a remote backend — and a cookie a browser silently drops is a pane
+that forgets everything. `TREE_MAX_PER_DIR` (150) still caps each directory's
+rows.
 
 ### Navigation allowlist
 
