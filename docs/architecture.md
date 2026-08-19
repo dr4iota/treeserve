@@ -89,12 +89,21 @@ stays shareable.
 custom scheme has nowhere to keep cookies. `treesight://localhost` has an
 opaque origin — it serializes to "null" — and a scheme request never reaches
 the network process that would do the storing, so `Set-Cookie` was dropped and
-no `Cookie` ever came back: every toggle returned to an unchanged page. The
-jar holds what a reply asked to store, adds it to requests that arrive without
-any, and persists to `prefs.txt` beside `recent.txt` so a chosen theme outlives
-the process. Windows and Android are handed the scheme as
-`http://treesight.localhost`, a real origin whose own jar works, and there the
-webview's `Cookie` header wins — the shell's jar is only ever the spare.
+no `Cookie` ever came back: every toggle returned to an unchanged page. The jar
+holds what a reply asked to store, folds it into the `Cookie` on every request
+out, and persists to `prefs.txt` beside `recent.txt` so a chosen theme outlives
+the process.
+
+`/.ts/set` is answered in `shell_action`, not by a page load — the other half of
+the same problem. Its reply is a 303, and a 303 is the one thing a custom scheme
+cannot carry out: the webview takes the empty body and stays where it is, so a
+stored preference first appeared on whatever page came next. The router still
+decides what `/.ts/set` stores; the shell hands the reply to the jar and reloads
+the page, which is also what keeps the reader's place in a long listing. Because
+nothing writes to the webview's own store any more, the jar wins over a `Cookie`
+it still sends — on Windows and Android, where the scheme arrives as
+`http://treesight.localhost` and that store is real, it holds only what the
+toggles wrote before this jar existed.
 
 `localStorage` would not do instead: an opaque origin has none to reach, and
 reading it needs script on the page, which the next paragraph rules out.
