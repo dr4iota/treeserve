@@ -321,8 +321,14 @@ fn head_and_header(
         .to_string(),
     };
 
-    // Breadcrumbs
-    let mut crumbs = format!("<a href=\"/\">{}</a>", html_escape(&site_title));
+    // Breadcrumbs, behind the id of the machine they are on when they are not on
+    // this one: `/home/hanhua` is a path every host in the world has a version of,
+    // and the listing should not be the only thing in the window that knows which.
+    let mut crumbs = match crate::root_id_bookmark(&root.id) {
+        Some(id) => format!("<span class=\"tag\">{}</span>", html_escape(id)),
+        None => String::new(),
+    };
+    crumbs.push_str(&format!("<a href=\"/\">{}</a>", html_escape(&site_title)));
     let mut acc: Vec<String> = Vec::new();
     for (i, seg) in rel.iter().enumerate() {
         acc.push(seg.clone());
@@ -1257,6 +1263,37 @@ mod tests {
         assert!(html.contains(">deep/</a>"), "{html}");
         assert!(
             html.contains("<a class=\"twisty\" href=\"/.ts/tree?shut=other&amp;back=%2Fhere%2F\""),
+            "{html}"
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A remote listing says which machine it is from. `/home/hanhua` is a path
+    /// every host has a version of, and the pane's Servers list only says which
+    /// one you *clicked*, not which one you are looking at now.
+    #[test]
+    fn a_remote_root_wears_its_id_beside_the_path() {
+        let dir = tmp_dir("rootid");
+        let mut state = state_at(dir.clone());
+        state.cfg.app_ui = true;
+        let prefs = Prefs { sidebar: true, ..prefs() };
+        let page = |state: &State| {
+            let root = state.cfg.root();
+            listing_page(state, &root, prefs, &[], &VfsPath::root(), &[], "/")
+        };
+
+        // A local root has no id to show, and shows none.
+        assert!(!page(&state).contains("class=\"tag\""), "local root");
+
+        let local = state.cfg.root();
+        state.cfg.set_root_vfs(Root {
+            id: "ssh:iota:/home/hanhua".to_string(),
+            vfs: std::sync::Arc::clone(&local.vfs),
+        });
+        let html = page(&state);
+        assert!(
+            html.contains("<div class=\"crumbs\"><span class=\"tag\">iota</span><a href=\"/\">"),
             "{html}"
         );
 

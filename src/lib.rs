@@ -348,6 +348,22 @@ pub fn root_id_is_local(id: &str) -> bool {
     }
 }
 
+/// The middle field of a remote RootId — `ssh:iota:/home/x` → `iota`.
+///
+/// Which backend it is and what the id means are the embedder's business; the
+/// *shape* is this crate's, because it is what `root_id_is_local` and `leaf_of`
+/// already read. The header draws it beside the path so a listing says which
+/// machine it is from, which is the one thing a remote path cannot say itself:
+/// `/home/hanhua` looks the same on every host in the world.
+pub fn root_id_bookmark(id: &str) -> Option<&str> {
+    if root_id_is_local(id) {
+        return None;
+    }
+    let rest = &id[id.find(':')? + 1..];
+    let end = rest.find(':')?;
+    Some(&rest[..end]).filter(|s| !s.is_empty())
+}
+
 /// Where a URL path points inside the served root.
 pub struct Resolved {
     /// Percent-decoded path segments, for breadcrumbs and file names.
@@ -1021,6 +1037,21 @@ mod tests {
 
     /// `leaf_of` must answer what `Path::file_name` answered when a RootId
     /// was a `PathBuf`, across the shapes a canonicalized root can take.
+    /// The id a remote root is filed under, for the header to show beside a path
+    /// that could be on any machine. A local path has none, whatever colons it
+    /// happens to contain.
+    #[test]
+    fn a_remote_root_id_carries_the_bookmark_it_came_from() {
+        assert_eq!(super::root_id_bookmark("ssh:iota:/home/hanhua"), Some("iota"));
+        assert_eq!(super::root_id_bookmark("s3:bucket:/data"), Some("bucket"));
+        assert_eq!(super::root_id_bookmark("/home/x"), None);
+        assert_eq!(super::root_id_bookmark(r"C:\Users\x"), None);
+        assert_eq!(super::root_id_bookmark("/odd:name/dir"), None);
+        // A scheme and nothing after it names nothing.
+        assert_eq!(super::root_id_bookmark("ssh::/x"), None);
+        assert_eq!(super::root_id_bookmark("ssh:iota"), None);
+    }
+
     #[test]
     fn leaf_of_mirrors_file_name() {
         assert_eq!(leaf_of("/home/x/mix"), Some("mix"));
