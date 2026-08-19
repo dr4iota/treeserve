@@ -301,9 +301,9 @@ body.nothing a.open:hover { border-color: var(--link); color: var(--link); text-
 /* Flex rather than a grid of equal columns, because these lists are not equal:
    Places and Servers hold names — "Home", "Iota" — and Recent holds paths, which
    are as long as somebody's directory tree. Equal columns spent the same width on
-   both and the paths were the only ones that suffered for it, so Recent grows at
-   two and a half times the rate and the names give up what they were not using.
-   Wrapping is the narrow-window answer: one list per line, full width each. */
+   both and the paths were the only ones that suffered for it. The name lists
+   share a row and Recent takes one of its own, below; wrapping is what puts one
+   list per line when even that does not fit. */
 body.nothing .start {
   display: flex;
   flex-wrap: wrap;

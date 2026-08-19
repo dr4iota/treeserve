@@ -1436,10 +1436,16 @@ mod tests {
     /// The page a window opens on when nothing has been opened in it: what there
     /// is to open, and no tree — the pane's lists are the page here, and a pane
     /// beside them would be the same list twice.
+    ///
+    /// Rootless on purpose, and with no temporary directory: this is the one page
+    /// that reads nothing off a disk, and `handle` only reaches it when there is
+    /// no root to read.
     #[test]
     fn the_start_page_offers_what_there_is_to_open() {
-        let dir = tmp_dir("start");
-        let mut state = state_at(dir.clone());
+        let mut state = State {
+            cfg: Config::rootless(),
+            hl: Hl::for_tests(),
+        };
         state.cfg.app_ui = true;
         state.cfg.picker = true;
         state.cfg.places = vec![("Home".to_string(), "/home/x".to_string())];
@@ -1459,9 +1465,6 @@ mod tests {
                 aside: Vec::new(),
             }],
         }]);
-        // Rootless: this page is what `handle` answers with when `cfg.root()` is
-        // None, and it must not need one to draw.
-        state.cfg.set_root_name(None);
         let html = start_page(&state, prefs(), "/");
 
         assert!(html.contains("<body class=\"app nothing\">"), "{html}");
@@ -1473,13 +1476,27 @@ mod tests {
         // The lists are the pane's rows, so a Recent still offers to be forgotten.
         assert!(html.contains("/.ts/forget?path="), "{html}");
 
+        // What the page calls itself, and where. The name belongs to whoever
+        // embedded this crate — a regression here is a window titled after the
+        // wrong program, which is the kind of thing that goes unnoticed.
+        state.cfg.app_name = Some("downstream".to_string());
+        state.cfg.app_version = Some("9.9.9".to_string());
+        state.cfg.intro = Some("A sentence of <its> own.".to_string());
+        let html = start_page(&state, prefs(), "/");
+        assert!(html.contains("<h1>downstream</h1>"), "{html}");
+        assert!(html.contains("<title>downstream</title>"), "{html}");
+        // Said once: the header's crumbs are empty on this page, on purpose.
+        assert!(html.contains("<div class=\"crumbs\"></div>"), "{html}");
+        assert!(html.contains("downstream v9.9.9"), "footer names the app");
+        assert!(!html.contains("treeserve v"), "not this crate's name");
+        // The embedder's sentence, escaped: it is text, not markup.
+        assert!(html.contains("A sentence of &lt;its&gt; own."), "{html}");
+
         // No picker on this platform: say so instead of drawing a dead button.
         state.cfg.picker = false;
         let html = start_page(&state, prefs(), "/");
         assert!(!html.contains("href=\"/.ts/open\""), "{html}");
         assert!(html.contains("Open one of the places below"), "{html}");
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     /// A remote listing says which machine it is from. `/home/hanhua` is a path
