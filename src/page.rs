@@ -292,10 +292,15 @@ fn head_and_header(
     extra_body_class: &str,
 ) -> String {
     let site_title = state.cfg.title_for(root);
+    // The document is titled by *name* where there is one — a bookmark's label,
+    // say — and by the folder otherwise. The header says the rest: the folder in
+    // the crumbs, the machine in the tag beside them, neither of which a window
+    // title has room for.
+    let named = state.cfg.root_name().unwrap_or_else(|| site_title.clone());
     let title = if rel.is_empty() {
-        site_title.clone()
+        named
     } else {
-        format!("{} — {}", rel.join("/"), site_title)
+        format!("{} — {}", rel.join("/"), named)
     };
 
     let data_theme = match prefs.theme {

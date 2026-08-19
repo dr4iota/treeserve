@@ -718,6 +718,9 @@ fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
     }
     let origin = scheme_base().to_string();
     let entry = format!("{origin}/");
+    // Before the state is handed over: the window is built after that, and this is
+    // the last moment its title can be read from the config that carries it.
+    let title = window_title(&state.cfg, &treeserve::util::display_path(&root));
     app.manage(Serving {
         state,
         origin: origin.clone(),
@@ -729,7 +732,7 @@ fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
         WINDOW,
         WebviewUrl::CustomProtocol(entry.parse().map_err(|e| format!("bad url: {e}"))?),
     )
-    .title(window_title(&treeserve::util::display_path(&root)))
+    .title(title)
     .inner_size(1200.0, 850.0)
     .min_inner_size(480.0, 360.0)
     // Shown by whoever knows there is something worth showing — `open_root`,
@@ -741,11 +744,18 @@ fn start(app: &AppHandle, root: PathBuf) -> Result<(), String> {
     // it is refreshed on every page load rather than only at window creation.
     .on_page_load({
         let app = app.clone();
+        let shell = shell_origins();
         move |win, payload| {
+            // Only for a page this server answered. An embedder's own page — a
+            // terminal, a config editor — carries its own title, and retitling
+            // the window from the served root left it named after a folder that
+            // page has nothing to do with.
             if payload.event() == tauri::webview::PageLoadEvent::Finished
+                && origin_allowed(&shell, payload.url())
                 && let Some(serving) = app.try_state::<Serving>()
             {
-                let _ = win.set_title(&window_title(&serving.state().cfg.root().id));
+                let cfg = &serving.state().cfg;
+                let _ = win.set_title(&window_title(cfg, &cfg.root().id));
             }
         }
     })
@@ -1278,7 +1288,12 @@ fn places(app: &AppHandle) -> Vec<(String, PathBuf)> {
     out
 }
 
-fn window_title(root_id: &str) -> String {
+/// The window's title for a page the tree served: what the root is called, if
+/// whoever re-rooted said, and otherwise the folder it ends in.
+fn window_title(cfg: &Config, root_id: &str) -> String {
+    if let Some(name) = cfg.root_name() {
+        return format!("{name} — treesight");
+    }
     match treeserve::leaf_of(root_id) {
         Some(name) => format!("{name} — treesight"),
         // A drive or a share: no last component, so say which one it is.

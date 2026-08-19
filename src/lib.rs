@@ -182,6 +182,9 @@ pub struct Config {
     /// Recently served roots as RootIds, newest first. Behind a lock like
     /// `root`, since it grows while the server runs.
     recent: RwLock<Arc<Vec<String>>>,
+    /// What to call the current root in a title. Behind a lock like `root`,
+    /// because it is set when the root is, from whatever re-rooted.
+    root_name: RwLock<Option<String>>,
     /// Extra pane sections from whoever embedded this server. Behind a lock
     /// for the reason `recent` is: a config UI can add a server while the
     /// server is running, and the next page render is where that shows up.
@@ -214,6 +217,7 @@ impl Config {
             app_ui: false,
             places: Vec::new(),
             recent: RwLock::new(Arc::new(Vec::new())),
+            root_name: RwLock::new(None),
             sections: RwLock::new(Arc::new(Vec::new())),
             status: RwLock::new(HashMap::new()),
         }
@@ -232,7 +236,12 @@ impl Config {
     /// Re-roots a running server onto any backend. Id and backend travel
     /// together, atomically — a page renders one root or the other, never a
     /// title from one and a tree from another.
+    ///
+    /// The root's name goes with the root it named. A caller with a better one
+    /// says so after this, which is the only way a name outlives a re-root — or
+    /// the window would still be called after the folder before it.
     pub fn set_root_vfs(&self, root: Root) {
+        self.set_root_name(None);
         *self.root.write().expect("root lock") = Arc::new(root);
     }
 
@@ -295,6 +304,18 @@ impl Config {
 
     pub fn set_title(&mut self, title: Option<String>) {
         self.title = title;
+    }
+
+    /// What to *call* the root, where a name is wanted rather than a path: the
+    /// document title and the window's. An embedder that knows the root by a name
+    /// of its own — a bookmark's label — says so here, and the header still shows
+    /// the folder and the id, which are the two things a title has no room for.
+    pub fn root_name(&self) -> Option<String> {
+        self.root_name.read().expect("root name lock").clone()
+    }
+
+    pub fn set_root_name(&self, name: Option<String>) {
+        *self.root_name.write().expect("root name lock") = name;
     }
 }
 
