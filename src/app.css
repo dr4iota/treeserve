@@ -289,13 +289,20 @@ body.nothing a.open {
   color: var(--fg);
 }
 body.nothing a.open:hover { border-color: var(--link); color: var(--link); text-decoration: none; }
+/* Flex rather than a grid of equal columns, because these lists are not equal:
+   Places and Servers hold names — "Home", "Iota" — and Recent holds paths, which
+   are as long as somebody's directory tree. Equal columns spent the same width on
+   both and the paths were the only ones that suffered for it, so Recent grows at
+   two and a half times the rate and the names give up what they were not using.
+   Wrapping is the narrow-window answer: one list per line, full width each. */
 body.nothing .start {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 1.5rem 2rem;
-  align-items: start;
+  align-items: flex-start;
 }
-body.nothing .start section { min-width: 0; }
+body.nothing .start > section { flex: 1 1 12rem; min-width: 0; }
+body.nothing .start > .recent { flex: 2.5 1 22rem; }
 body.nothing .start h2 {
   font-size: .75rem;
   font-weight: 600;
@@ -312,9 +319,23 @@ body.nothing .start h2 a.secact { margin-left: auto; color: var(--muted); opacit
 body.nothing .start h2 a.secact:hover { color: var(--link); opacity: 1; }
 body.nothing .start ul { list-style: none; margin: 0; padding: 0; }
 body.nothing .start li { overflow: hidden; text-overflow: ellipsis; }
-body.nothing .start .row { display: flex; align-items: center; gap: .3rem; }
-body.nothing .start .row > a { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-body.nothing .start a { display: block; padding: .15rem .3rem; border-radius: 4px; color: var(--fg); }
+body.nothing .start .row { display: flex; align-items: center; }
+/* The row's first child is the way in and takes the width; the button after it is
+   pushed to the far edge and stays its own size. `.row > a` matched both, so the
+   button grew as well and sat wherever the name left it — a column of crosses at
+   ragged margins, which is what made the list look untidy rather than aligned. */
+body.nothing .start .row > a:first-child { flex: 1 1 auto; min-width: 0; }
+body.nothing .start .row > a.aside {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 0 .15rem;
+  line-height: 1;
+  color: var(--muted);
+  opacity: .4;
+}
+body.nothing .start .row:hover > a.aside { opacity: 1; }
+body.nothing .start .row > a.aside:hover { color: var(--link); background: none; }
+body.nothing .start a { padding: .15rem .3rem; border-radius: 4px; color: var(--fg); }
 body.nothing .start a:hover { background: var(--border); text-decoration: none; }
 body.nothing .start .gone > a, body.nothing .start .gone > .row > a { color: var(--muted); }
 body.nothing .start .why { display: block; font-size: .75rem; color: var(--muted); padding: 0 .3rem; }
@@ -339,9 +360,10 @@ body.nothing .start .why { display: block; font-size: .75rem; color: var(--muted
    leaf on a clipped row is inside the head: an ellipsis lands after the last
    character that fits, and what the next one needed goes unused. At most one
    character, and the price of not measuring. */
-nav.tree .chooser a, footer .where { display: flex; }
-nav.tree .chooser .head, footer .where .head,
-nav.tree .chooser .leaf, footer .where .leaf {
+nav.tree .chooser a, footer .where, body.nothing .start li > a,
+body.nothing .start .row > a:first-child { display: flex; }
+nav.tree .chooser .head, footer .where .head, body.nothing .start .head,
+nav.tree .chooser .leaf, footer .where .leaf, body.nothing .start .leaf {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -358,7 +380,10 @@ nav.tree .chooser .leaf, footer .where .leaf {
    thing being protected was the mark that says a path was shortened, at the cost
    of the name it was shortening for. The name wins; the whole path is in the
    `title` either way. */
-nav.tree .chooser .head, footer .where .head { flex-shrink: 1000; min-width: 0; }
+nav.tree .chooser .head, footer .where .head, body.nothing .start .head {
+  flex-shrink: 1000;
+  min-width: 0;
+}
 /* The leaf does not shrink, and is capped instead.
                                                                        [continued]
    Shrinking it at all was the bug behind "it truncates on the second screen".
@@ -378,8 +403,11 @@ nav.tree .chooser .head, footer .where .head { flex-shrink: 1000; min-width: 0; 
    Note that the DOM cannot see this. `clientWidth` and `scrollWidth` are integers
    and both round to the same number, so a probe reports "not clipped" while the
    paint plainly shows an ellipsis. Only a screenshot catches it. */
-nav.tree .chooser .leaf, footer .where .leaf { flex: 0 0 auto; max-width: 100%; }
-nav.tree .chooser .head { color: var(--muted); }
+nav.tree .chooser .leaf, footer .where .leaf, body.nothing .start .leaf {
+  flex: 0 0 auto;
+  max-width: 100%;
+}
+nav.tree .chooser .head, body.nothing .start .head { color: var(--muted); }
 /* A shortcut whose check came back badly. The lists are drawn before anything is
    checked — a check can block for as long as a dead network drive takes to admit
    it — so this is what an answer looks like when it arrives: the entry dimmed to
