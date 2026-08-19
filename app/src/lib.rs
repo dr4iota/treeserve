@@ -2,18 +2,19 @@
 //!
 //! The same router the CLI serves over HTTP, with no HTTP under it: the window
 //! opens on a scheme this shell registers, and every request the webview makes
-//! is answered by calling `treeserve::handle`. Everything the browser build
-//! does — cookies for preferences, 303 redirects, Range requests, relative
-//! links — keeps working unchanged, because all of it belongs to the router
-//! rather than to the socket that used to carry it.
+//! is answered by calling `treeserve::handle`. 303 redirects, Range requests
+//! and relative links keep working unchanged, because all of it belongs to the
+//! router rather than to the socket that used to carry it. Cookies did not: a
+//! custom scheme has no cookie jar, so the shell keeps one itself — see [`Jar`].
 //!
 //! Nothing is listening on anything. There is no address for another process
 //! on the machine to find, which is why there is nothing to authenticate to.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 // Both serve `picker_start_dir`, which is the desktop picker's alone.
 #[cfg(desktop)]
 use std::sync::mpsc;
@@ -201,17 +202,20 @@ pub fn run_with(context: tauri::Context<tauri::Wry>, mut ext: ShellExt) {
     // builder, which is before there is an AppHandle to build a root from, so
     // `start` fills it in during setup and the handler answers 503 until then.
     let router = Router(Arc::new(OnceLock::new()));
+    let jar = Arc::new(Jar::default());
+    let opened = Arc::clone(&jar);
     let mut builder = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(Router(Arc::clone(&router.0)))
         .register_asynchronous_uri_scheme_protocol(SCHEME, move |_ctx, request, responder| {
             let slot = Arc::clone(&router.0);
+            let jar = Arc::clone(&jar);
             // Off the webview's thread: highlighting a large file is the slow
             // part of answering, and the tiny_http build had a pool of workers
             // for exactly that reason. Doing it here would stop the window
             // painting while it ran.
-            thread::spawn(move || responder.respond(serve(&slot, request)));
+            thread::spawn(move || responder.respond(serve(&slot, &jar, request)));
         });
     if let Some(f) = configure {
         builder = f(builder);
@@ -220,6 +224,10 @@ pub fn run_with(context: tauri::Context<tauri::Wry>, mut ext: ShellExt) {
         .setup(move |app| {
             app.manage(SharedExt(Arc::clone(&ext)));
             let handle = app.handle().clone();
+            // Before the first page is asked for: it is the one that reads them.
+            if let Ok(dir) = app.path().app_config_dir() {
+                opened.open(dir.join("prefs.txt"));
+            }
             // The server and the window go up first, hidden, on a placeholder root
             // that is never seen. Creating the window is the one slow thing left in
             // a cold start — WebView2 spawning its processes, and on a first ever
@@ -482,10 +490,102 @@ fn open_failed(app: &AppHandle, previous: Option<tauri::Url>) {
 /// registered on the builder and the `start` that eventually fills it.
 struct Router(Arc<OnceLock<Arc<treeserve::State>>>);
 
+/// Cookies, for a scheme that has none.
+///
+/// Preferences are cookies — `/.ts/set` answers with `Set-Cookie: ts_theme=…`
+/// and every page after reads them back off the request. That is a *network*
+/// mechanism, and a custom scheme never goes near the network: on Linux and
+/// macOS these pages come from `treesight://localhost`, whose origin serializes
+/// to "null", so WebKit stores nothing and sends nothing back. Both toggles
+/// bounced through `/.ts/set` and returned to the same page unchanged.
+///
+/// So the shell holds the jar. It keeps what the router asked to store and puts
+/// it back on requests that arrive without any, which leaves a platform whose
+/// own jar does work — Windows, Android, where the scheme is handed over as
+/// `http://…localhost` — answering out of that one exactly as before.
+///
+/// `Path` and `Max-Age` are dropped on the floor: every page is under `/`, and
+/// the file this is written to *is* the expiry. Nothing here is a secret; the
+/// whole content is which theme you picked.
+#[derive(Default)]
+struct Jar {
+    cookies: Mutex<BTreeMap<String, String>>,
+    /// Where the jar lives. Set in `setup`, because the protocol handler is
+    /// registered on the builder — before there is an `AppHandle` to ask.
+    file: OnceLock<PathBuf>,
+}
+
+impl Jar {
+    /// Reads whatever a previous run stored. A theme chosen once is chosen.
+    fn open(&self, file: PathBuf) {
+        if let Ok(text) = fs::read_to_string(&file) {
+            *self.cookies.lock().unwrap() = jar_from_text(&text);
+        }
+        let _ = self.file.set(file);
+    }
+
+    /// The `Cookie` header for the next request, or nothing while nothing is
+    /// stored.
+    fn header(&self) -> Option<String> {
+        let cookies = self.cookies.lock().unwrap();
+        if cookies.is_empty() {
+            return None;
+        }
+        Some(
+            cookies
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+                .join("; "),
+        )
+    }
+
+    /// Remembers what a reply asked to store, leaving the header in place for a
+    /// platform that can honour it.
+    fn store(&self, reply: &treeserve::Reply) {
+        let pairs: Vec<_> = reply
+            .headers
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("Set-Cookie"))
+            .filter_map(|(_, v)| cookie_pair(v))
+            .collect();
+        if pairs.is_empty() {
+            return;
+        }
+        let mut cookies = self.cookies.lock().unwrap();
+        cookies.extend(pairs);
+        if let Some(file) = self.file.get() {
+            if let Some(dir) = file.parent() {
+                let _ = fs::create_dir_all(dir);
+            }
+            let _ = fs::write(file, jar_text(&cookies));
+        }
+    }
+}
+
+/// The name and value out of a `Set-Cookie` value: everything up to the first
+/// `;` is the pair, the attributes after it are none of this jar's business.
+fn cookie_pair(value: &str) -> Option<(String, String)> {
+    let (k, v) = value.split(';').next()?.split_once('=')?;
+    let (k, v) = (k.trim(), v.trim());
+    (!k.is_empty()).then(|| (k.to_string(), v.to_string()))
+}
+
+/// One `name=value` per line, in the shape `recent.txt` set: a file somebody can
+/// read, and delete to go back to the defaults.
+fn jar_text(cookies: &BTreeMap<String, String>) -> String {
+    cookies.iter().map(|(k, v)| format!("{k}={v}\n")).collect()
+}
+
+fn jar_from_text(text: &str) -> BTreeMap<String, String> {
+    text.lines().filter_map(|l| cookie_pair(l.trim())).collect()
+}
+
 /// Answers one webview request out of the router, or says there is nothing to
 /// answer with yet.
 fn serve(
     slot: &OnceLock<Arc<treeserve::State>>,
+    jar: &Jar,
     request: tauri::http::Request<Vec<u8>>,
 ) -> tauri::http::Response<Vec<u8>> {
     let Some(state) = slot.get() else {
@@ -495,26 +595,44 @@ fn serve(
             body: treeserve::Body::Text("not started".into()),
         });
     };
-    reply_to_response(treeserve::handle(state, &to_req(&request)))
+    let reply = treeserve::handle(state, &to_req(&request, jar));
+    jar.store(&reply);
+    reply_to_response(reply)
 }
 
 /// A webview request, in the terms the router speaks. `Req::url` is path and
 /// query only, which is what tiny_http's `url()` gave it and what every route
 /// here matches on — the scheme and host are this shell's own and say nothing.
-fn to_req(request: &tauri::http::Request<Vec<u8>>) -> treeserve::Req {
+fn to_req(request: &tauri::http::Request<Vec<u8>>, jar: &Jar) -> treeserve::Req {
     let uri = request.uri();
+    let headers = with_jar(
+        request
+            .headers()
+            .iter()
+            .filter_map(|(k, v)| v.to_str().ok().map(|v| (k.as_str().to_string(), v.to_string())))
+            .collect(),
+        jar,
+    );
     treeserve::Req {
         url: match uri.query() {
             Some(q) => format!("{}?{}", uri.path(), q),
             None => uri.path().to_string(),
         },
-        headers: request
-            .headers()
-            .iter()
-            .filter_map(|(k, v)| v.to_str().ok().map(|v| (k.as_str().to_string(), v.to_string())))
-            .collect(),
+        headers,
         is_get: request.method() == tauri::http::Method::GET,
     }
+}
+
+/// The request's headers with the jar's cookies added — but only when the
+/// webview brought none of its own. Where its jar does work that one is the
+/// truth and this is a spare, which is what keeps Windows behaving as it did.
+fn with_jar(mut headers: Vec<(String, String)>, jar: &Jar) -> Vec<(String, String)> {
+    if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("Cookie"))
+        && let Some(value) = jar.header()
+    {
+        headers.push(("Cookie".to_string(), value));
+    }
+    headers
 }
 
 /// A decided reply, as bytes the webview will take.
@@ -1173,6 +1291,98 @@ pub fn remember_root_id(app: &AppHandle, id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_set_cookie_is_a_name_a_value_and_nothing_else() {
+        assert_eq!(
+            cookie_pair("ts_theme=dark; Path=/; Max-Age=31536000; SameSite=Lax"),
+            Some(("ts_theme".into(), "dark".into()))
+        );
+        assert_eq!(cookie_pair("ts_sidebar=0"), Some(("ts_sidebar".into(), "0".into())));
+        assert_eq!(cookie_pair("nonsense"), None);
+        assert_eq!(cookie_pair("=0"), None);
+    }
+
+    /// The whole round trip the toggles make, with the webview's missing jar
+    /// standing in for: click `/.ts/set`, then ask for the page again and get
+    /// the preference back. Everything here but the webview itself.
+    #[test]
+    fn a_toggle_survives_the_trip_back_to_the_next_page() {
+        let dir = std::env::temp_dir().join(format!("treesight-jar-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut cfg = Config::new(dir.clone());
+        cfg.app_ui = true;
+        let state = treeserve::state_for(cfg);
+        let jar = Jar::default();
+        let html = || treeserve::Req {
+            url: "/".to_string(),
+            headers: with_jar(vec![("Accept".into(), "text/html".into())], &jar),
+            is_get: true,
+        };
+
+        // Nothing stored: the defaults, and a pane.
+        let before = match treeserve::handle(&state, &html()).body {
+            treeserve::Body::Text(t) => t,
+            _ => panic!("a listing is text"),
+        };
+        assert!(before.contains("<html lang=\"en\">"), "no theme yet");
+        assert!(before.contains("<nav"), "pane is on by default");
+
+        // The toggles, as the header draws them.
+        for q in ["/.ts/set?theme=dark&back=/", "/.ts/set?sidebar=0&back=/"] {
+            let reply = treeserve::handle(
+                &state,
+                &treeserve::Req {
+                    url: q.to_string(),
+                    headers: Vec::new(),
+                    is_get: true,
+                },
+            );
+            assert_eq!(reply.status, 303);
+            jar.store(&reply);
+        }
+
+        let after = match treeserve::handle(&state, &html()).body {
+            treeserve::Body::Text(t) => t,
+            _ => panic!("a listing is text"),
+        };
+        assert!(after.contains("<html lang=\"en\" data-theme=\"dark\">"), "{after}");
+        assert!(!after.contains("<nav"), "pane should be gone");
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_jar_reads_back_what_it_wrote() {
+        let jar = Jar::default();
+        assert_eq!(jar.header(), None);
+        jar.store(&treeserve::Reply {
+            status: 303,
+            headers: vec![
+                ("Set-Cookie".into(), "ts_theme=dark; Path=/".into()),
+                ("Location".into(), "/".into()),
+            ],
+            body: treeserve::Body::Empty,
+        });
+        assert_eq!(jar.header().as_deref(), Some("ts_theme=dark"));
+        // A second toggle adds to the jar rather than replacing it, and the same
+        // key set twice keeps the later answer.
+        jar.store(&treeserve::Reply {
+            status: 303,
+            headers: vec![
+                ("Set-Cookie".into(), "ts_sidebar=0".into()),
+                ("Set-Cookie".into(), "ts_theme=light".into()),
+            ],
+            body: treeserve::Body::Empty,
+        });
+        assert_eq!(jar.header().as_deref(), Some("ts_sidebar=0; ts_theme=light"));
+        assert_eq!(jar_from_text(&jar_text(&jar.cookies.lock().unwrap())), {
+            let mut want = BTreeMap::new();
+            want.insert("ts_sidebar".to_string(), "0".to_string());
+            want.insert("ts_theme".to_string(), "light".to_string());
+            want
+        });
+    }
 
     /// The distinction the pane makes, and the one `ErrorKind` cannot make on its
     /// own: a folder someone deleted is gone, and a share whose host is off is not

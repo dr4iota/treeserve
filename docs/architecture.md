@@ -85,6 +85,20 @@ HTML pages are `Cache-Control: no-store`. Raw bodies get an ETag from
 (`ts_theme`, `ts_ln`, `ts_sidebar`), not query strings, so a shared URL
 stays shareable.
 
+**The shell keeps its own cookie jar** (`Jar`, `app/src/lib.rs`), because a
+custom scheme has nowhere to keep cookies. `treesight://localhost` has an
+opaque origin — it serializes to "null" — and a scheme request never reaches
+the network process that would do the storing, so `Set-Cookie` was dropped and
+no `Cookie` ever came back: every toggle returned to an unchanged page. The
+jar holds what a reply asked to store, adds it to requests that arrive without
+any, and persists to `prefs.txt` beside `recent.txt` so a chosen theme outlives
+the process. Windows and Android are handed the scheme as
+`http://treesight.localhost`, a real origin whose own jar works, and there the
+webview's `Cookie` header wins — the shell's jar is only ever the spare.
+
+`localStorage` would not do instead: an opaque origin has none to reach, and
+reading it needs script on the page, which the next paragraph rules out.
+
 There is **no JavaScript on served pages**. Toggles are links to `/.ts/set`.
 The only script in the product is the shell's `initialization_script`
 (keyboard shortcuts), injected by Tauri into the webview, not into HTML.
