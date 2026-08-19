@@ -178,6 +178,15 @@ pub struct Config {
     /// controls do nothing on their own: they are links the shell intercepts,
     /// and this server has no route that would act on them.
     pub app_ui: bool,
+    /// Whether this platform can be asked for a folder. Desktop can; a phone's
+    /// picker wants a per-directory grant the shell does not request yet, so the
+    /// start page offers what it can already reach instead of a button that does
+    /// nothing when pressed.
+    pub picker: bool,
+    /// What the product is called, for the one page that has no folder to be
+    /// named after. The embedder's name, not this crate's: a shell serving these
+    /// pages is what the reader thinks they are using.
+    pub app_name: Option<String>,
     /// Fixed shortcuts for the Places list — (label, RootId) pairs the
     /// embedder supplies, since it is the side that knows the platform's
     /// home, desktop and drive layout. Only rendered when `app_ui` is set.
@@ -218,6 +227,8 @@ impl Config {
             syn_light: EmbeddedThemeName::InspiredGithub,
             syn_dark: EmbeddedThemeName::OneHalfDark,
             app_ui: false,
+            picker: false,
+            app_name: None,
             places: Vec::new(),
             recent: RwLock::new(Arc::new(Vec::new())),
             root_name: RwLock::new(None),

@@ -628,7 +628,19 @@ fn pane_html(
     let mut out = String::from("<nav class=\"tree\">");
     // The tree first and foremost: it is what the pane is for, and it is what
     // grows, so it takes the height and the shortcuts below settle for what is
-    // left.
+    // left. Under a heading like the lists below it, because it is one more of
+    // them — the difference being that this one is somewhere you are, so the
+    // heading carries the way to be somewhere else instead.
+    out.push_str(&format!(
+        "<section class=\"files\"><h2>Files{}</h2>",
+        match state.cfg.picker {
+            true => format!(
+                "<a class=\"secact\" href=\"/.ts/open\" title=\"Open Folder… (Ctrl+O)\">{}</a>",
+                svg_icon(ICON_FOLDER)
+            ),
+            false => String::new(),
+        }
+    ));
     tree_dir(
         state,
         root.vfs.as_ref(),
@@ -638,6 +650,7 @@ fn pane_html(
         url_now,
         &mut out,
     );
+    out.push_str("</section>");
     if state.cfg.app_ui {
         out.push_str("<div class=\"chooser\">");
         // Two paths on purpose: opening a Place is not something Recent should

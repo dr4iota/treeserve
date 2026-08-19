@@ -228,6 +228,12 @@ Places come from the platform (home, desktop, documents, downloads, drive
 letters or `/`). Recent is `recent.txt` in the app config dir, newest
 first, max 8, RootId strings. Opening a Place does not write Recent.
 
+The tree sits in a **Files** section, headed like Places and Recent, and that
+heading carries the folder picker — which the status line then shows only below
+50rem, where the pane has left the layout, so no width offers two. A section's
+`heading_action` is `(href, icon, title)`: the mark is the embedder's, because a
+plus promises adding one thing and a list of servers is *managed*.
+
 Every Recent row carries a Forget button — `/.ts/forget?path=`, answered by
 `forget_root_id`, which drops the id from the list and the file and reloads the
 page. Recent alone gets one: it is the only pane list that is a record of what
