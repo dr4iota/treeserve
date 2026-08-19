@@ -1094,6 +1094,16 @@ fn shell_action(app: &AppHandle, url: &tauri::Url) -> bool {
         // stored is still the router's call — only going back to the page is
         // this side's.
         "/.ts/set" => set_pref(app, url),
+        // A Recent row's own button. Nothing to open and nothing to wait for, so
+        // unlike its neighbours this one answers here and reloads: the pane is
+        // part of the page, and the row has to leave it.
+        "/.ts/forget" => match url.query_pairs().find(|(k, _)| k == "path") {
+            Some((_, path)) => {
+                forget_root_id(app, path.trim());
+                eval(app, "location.reload()");
+            }
+            None => fail(app, "No folder in that link.", false),
+        },
         // Recent; a Place is the same but not worth remembering, since the pane
         // already lists it. Both carry a path we rendered ourselves, though
         // `open_root` still checks it — a remembered folder can go away.
@@ -1349,12 +1359,32 @@ fn with_front(mut list: Vec<String>, id: &str) -> Vec<String> {
 /// the root — for a local one, the display-form path.
 pub fn remember_root_id(app: &AppHandle, id: &str) {
     let list = with_front(recent(app), id);
-
     if let Some(serving) = app.try_state::<Serving>() {
-        serving.state().cfg.set_recent(list.clone());
         // Whoever got this far has already resolved the root, so this one is
         // known good without anybody having to look again.
         serving.state().cfg.set_root_status(id.to_string(), RootStatus::Ok);
+    }
+    save_recent(app, list);
+}
+
+/// Drops a RootId from Recent — the row's own button, for a folder that moved or
+/// a root written down wrong by a bug since fixed. Only the list: the folder is
+/// not this shell's to delete, and the page says "Forget" for that reason.
+pub fn forget_root_id(app: &AppHandle, id: &str) {
+    let mut list = recent(app);
+    let before = list.len();
+    list.retain(|x| x != id);
+    if list.len() == before {
+        return;
+    }
+    save_recent(app, list);
+}
+
+/// The list, in the running server and on disk. Both are the same order, and the
+/// pane reads the first of them on the next render.
+fn save_recent(app: &AppHandle, list: Vec<String>) {
+    if let Some(serving) = app.try_state::<Serving>() {
+        serving.state().cfg.set_recent(list.clone());
     }
     let Some(file) = recent_file(app) else { return };
     if let Some(dir) = file.parent() {

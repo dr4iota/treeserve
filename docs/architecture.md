@@ -201,9 +201,10 @@ shell's capability:
   treesight sets it. There is no CLI flag — a flag plus `--bind 0.0.0.0`
   would be a remote-filesystem proxy.
 - The controls are ordinary links (`/.ts/open`, `/.ts/root`, `/.ts/place`,
-  `/.ts/back`, `/.ts/reload`, `/.ts/print`). **None of those is a server
-  route**; the CLI 404s them. The shell's `on_navigation` cancels the
-  navigation and does the work.
+  `/.ts/back`, `/.ts/reload`, `/.ts/print`, `/.ts/forget`). **None of those is
+  a server route**; the CLI 404s them. The shell's `on_navigation` cancels the
+  navigation and does the work. `/.ts/set` is a server route the shell answers
+  itself as well — see the cookie jar above.
 
 `?dl=1` is intercepted the same way: `resolve_in_root`, then a native Save
 dialog (non-blocking, main thread), and the copy itself — `Vfs::open` →
@@ -226,6 +227,13 @@ whoever supplied them owns their status via `set_root_status`.
 Places come from the platform (home, desktop, documents, downloads, drive
 letters or `/`). Recent is `recent.txt` in the app config dir, newest
 first, max 8, RootId strings. Opening a Place does not write Recent.
+
+Every Recent row carries a Forget button — `/.ts/forget?path=`, answered by
+`forget_root_id`, which drops the id from the list and the file and reloads the
+page. Recent alone gets one: it is the only pane list that is a record of what
+the reader did rather than a fixture, so the only one that can hold something
+they want gone — a folder that moved, or a root some since-fixed bug wrote down
+wrong. It forgets the row and never touches the folder.
 
 ### Navigation allowlist
 

@@ -159,6 +159,11 @@ fn icon_pane(on: bool) -> String {
 /// so what it draws is the one thing a list of things can be asked for.
 const ICON_PLUS: &str = "<path d=\"M8 3.6v8.8M3.6 8h8.8\"/>";
 
+/// "Forget this row": a cross, the mark that has meant *remove* on a list since
+/// lists had rows. Drawn to `ICON_PLUS`'s measurements, which is what puts it on
+/// the same optical weight as the one action a heading can carry.
+const ICON_CROSS: &str = "<path d=\"M4.5 4.5l7 7M11.5 4.5l-7 7\"/>";
+
 /// "Serve this folder as the root": an arrow going in through the side of a frame.
 const ICON_AS_ROOT: &str = "<path d=\"M9.8 3.4h2.8v9.2H9.8\"/><path d=\"M3.4 8h5.8\"/>\
      <path d=\"M6.8 5.6L9.2 8l-2.4 2.4\"/>";
@@ -629,17 +634,33 @@ fn pane_html(state: &State, root: &Root, cur: &[String]) -> String {
         // No label, so each of these is drawn as its path: a Place is somewhere
         // with a name, a Recent is just a folder you were in, and which one it
         // was is a question about where it sits.
+        //
+        // The one list here that is a record rather than a fixture, so the one
+        // that can hold something the reader wants gone — a folder that moved, a
+        // root a since-fixed bug wrote down wrong. Each row carries its own way
+        // out, in the aside slot an embedder's sections already use.
+        let recent = state.cfg.recent();
+        let forget: Vec<[(String, String, String); 1]> = recent
+            .iter()
+            .map(|p| {
+                [(
+                    format!("/.ts/forget?path={}", percent_encode(p)),
+                    ICON_CROSS.to_string(),
+                    "Forget this folder".to_string(),
+                )]
+            })
+            .collect();
         root_list(
             &mut out,
             state,
             "recent",
             "Recent",
             None,
-            state.cfg.recent().iter().map(|p| Row {
+            recent.iter().zip(&forget).map(|(p, aside)| Row {
                 label: None,
                 id: p,
                 action: "/.ts/root",
-                aside: &[],
+                aside,
             }),
         );
         out.push_str("</div>");
@@ -1123,6 +1144,35 @@ mod tests {
         ));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// Every Recent row carries its own way out of the list, and only Recent:
+    /// Places is a fixture the reader did not write and cannot unwrite here.
+    #[test]
+    fn a_recent_row_has_a_forget_button_and_a_place_does_not() {
+        let dir = tmp_dir("forget");
+        let mut state = state_at(dir.clone());
+        state.cfg.app_ui = true;
+        state.cfg.places = vec![("Home".to_string(), "/home/x".to_string())];
+        state.cfg.set_recent(vec!["ssh:iota:/home/hanhua/~".to_string()]);
+        let prefs = Prefs { sidebar: true, ..prefs() };
+        let root = state.cfg.root();
+        let html = listing_page(&state, &root, prefs, &[], &VfsPath::root(), &[], "/");
+
+        let button = concat!(
+            "<a class=\"aside\" href=\"/.ts/forget?path=ssh%3Aiota%3A%2Fhome%2Fhanhua%2F~\"",
+            " title=\"Forget this folder\">"
+        );
+        assert!(html.contains(button), "{html}");
+        // The Places row is drawn the plain way: no row wrapper, no button.
+        let place = concat!(
+            "<li><a href=\"/.ts/place?path=%2Fhome%2Fx\"",
+            " title=\"/home/x\">Home</a></li>"
+        );
+        assert!(html.contains(place), "{html}");
+        assert_eq!(html.matches("/.ts/forget").count(), 1, "{html}");
+
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     /// A section the embedder brought is drawn where Places and Recent are
