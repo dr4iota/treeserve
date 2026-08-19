@@ -272,7 +272,13 @@ nav.tree .more { color: var(--muted); font-style: italic; }
    wide window and one column down a narrow one, out of the same section markup the
    pane draws them in — so they are the same rows, and there is one place where a
    row's shape is decided. */
-body.nothing main { max-width: 60rem; margin-inline: auto; }
+/* `width: 100%` and not just a max-width, because `body` is a column flex
+   container: an auto inline margin centres this, and in doing so switches off the
+   default stretch — leaving the width to be decided by the content. The content
+   here is a column of paths that must not wrap, so the widest one became the
+   width of the page and the window was the thing that overflowed. With a width to
+   fit inside, `flex-grow` has something to hand out and the paths ellipsise. */
+body.nothing main { width: 100%; max-width: 60rem; margin-inline: auto; }
 body.nothing .intro { margin: 1rem 0 2rem; max-width: 34rem; }
 body.nothing .intro p { margin: 0 0 1rem; }
 body.nothing .intro .hint { color: var(--muted); font-size: .9rem; }
@@ -302,7 +308,11 @@ body.nothing .start {
   align-items: flex-start;
 }
 body.nothing .start > section { flex: 1 1 12rem; min-width: 0; }
-body.nothing .start > .recent { flex: 2.5 1 22rem; }
+/* Recent takes a line of its own. Names are short and paths are long, and no
+   ratio between the two is right at every width — where a path shares a line it
+   is the one that runs out of room. A full-width basis wraps it under the name
+   lists, which is where it looked right anyway. */
+body.nothing .start > .recent { flex: 1 1 100%; }
 body.nothing .start h2 {
   font-size: .75rem;
   font-weight: 600;
@@ -315,7 +325,18 @@ body.nothing .start h2 {
   display: flex;
   align-items: center;
 }
-body.nothing .start h2 a.secact { margin-left: auto; color: var(--muted); opacity: .7; }
+/* The mark is 14px in a 12px line, so a heading that carries one stood taller
+   than the heading beside it and the two rules underneath did not meet. Its box
+   is the line's height, and the drawing overflows it: the rule is what the eye
+   lines up, not the icon. */
+body.nothing .start h2 a.secact {
+  margin-left: auto;
+  height: 1em;
+  line-height: 1;
+  color: var(--muted);
+  opacity: .7;
+}
+body.nothing .start h2 a.secact svg { display: block; margin-top: -.15em; }
 body.nothing .start h2 a.secact:hover { color: var(--link); opacity: 1; }
 body.nothing .start ul { list-style: none; margin: 0; padding: 0; }
 body.nothing .start li { overflow: hidden; text-overflow: ellipsis; }
