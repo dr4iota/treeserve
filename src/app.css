@@ -92,6 +92,22 @@ header {
 }
 .back:hover { color: var(--link); border-color: var(--link); text-decoration: none; }
 .crumbs { flex: 1; min-width: 8rem; font-weight: 500; overflow-wrap: anywhere; }
+/* A token in a bag: an id, a name a machine is filed under. Small, monospaced and
+   fenced off, so it never reads as the first word of the path beside it. Here
+   rather than in a page of its own, because the shell that serves pages next to
+   these ones puts the same bag on the same kind of thing. */
+.tag {
+  font-size: .75rem;
+  font-weight: 400;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 0 .4rem;
+  margin-right: .4rem;
+  white-space: nowrap;
+}
 .crumbs .sep { color: var(--muted); margin: 0 .15rem; }
 .controls { display: flex; gap: .35rem; flex-wrap: wrap; }
 .controls a, .controls span.ctl {

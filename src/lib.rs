@@ -47,6 +47,16 @@ pub extern "C" fn hypotf(x: f32, y: f32) -> f32 {
 }
 
 const APP_CSS: &str = include_str!("app.css");
+
+/// The stylesheet this crate's pages are drawn with, for a shell that serves
+/// pages of its own beside them — telesight's Servers editor and terminal, which
+/// come off a different scheme and so cannot link `/.ts/app.css`. It carries the
+/// palette (`--bg`, `--fg`, `--link`, …), the header, and the label-to-icon
+/// collapse the narrow window relies on, so a page that wears it matches without
+/// keeping a second copy of any of that in step.
+pub fn app_css() -> &'static str {
+    APP_CSS
+}
 const MATH_CSS: &str = include_str!("math.css");
 
 /// What one of the pane's shortcuts turned out to be, once something looked.

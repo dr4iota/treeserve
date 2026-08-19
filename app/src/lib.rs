@@ -25,6 +25,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
+use treeserve::page::ThemeMode;
 use treeserve::{Config, RootStatus};
 
 /// The one window's label — public so a downstream action ([`ShellExt`])
@@ -533,12 +534,22 @@ impl Jar {
     /// Remembers what a reply asked to store, leaving the header in place for a
     /// platform that can honour it.
     fn store(&self, reply: &treeserve::Reply) {
-        let pairs: Vec<_> = reply
-            .headers
-            .iter()
-            .filter(|(k, _)| k.eq_ignore_ascii_case("Set-Cookie"))
-            .filter_map(|(_, v)| cookie_pair(v))
-            .collect();
+        self.put(
+            reply
+                .headers
+                .iter()
+                .filter(|(k, _)| k.eq_ignore_ascii_case("Set-Cookie"))
+                .filter_map(|(_, v)| cookie_pair(v))
+                .collect(),
+        );
+    }
+
+    /// One preference, chosen somewhere other than a reply — see [`set_theme`].
+    fn set(&self, name: &str, value: &str) {
+        self.put(vec![(name.to_string(), value.to_string())]);
+    }
+
+    fn put(&self, pairs: Vec<(String, String)>) {
         if pairs.is_empty() {
             return;
         }
@@ -1369,6 +1380,43 @@ pub fn remember_root_id(app: &AppHandle, id: &str) {
         serving.state().cfg.set_root_status(id.to_string(), RootStatus::Ok);
     }
     save_recent(app, list);
+}
+
+/// The theme the shell's own pages are being drawn with.
+///
+/// For an embedder whose pages sit beside them: the toggle writes `ts_theme` to
+/// the jar, and nothing outside this crate could read it, so a scheme page of
+/// its own had no way to be dark when the tree was. `Auto` is the answer when
+/// nobody has chosen — the same answer the pages act on, which is to let
+/// `prefers-color-scheme` decide.
+pub fn theme<R: tauri::Runtime>(app: &AppHandle<R>) -> ThemeMode {
+    if let Some(jar) = app.try_state::<JarState>()
+        && let Some(mode) = jar
+            .0
+            .cookies
+            .lock()
+            .unwrap()
+            .get("ts_theme")
+            .and_then(|v| ThemeMode::from_str(v))
+    {
+        return mode;
+    }
+    app.try_state::<Serving>()
+        .map(|s| s.state().cfg.theme)
+        .unwrap_or(ThemeMode::Auto)
+}
+
+/// Chooses the theme, for a page of an embedder's own that carries the same
+/// control as the tree's header.
+///
+/// The tree's toggle is a link to `/.ts/set`, which answers with a cookie and a
+/// redirect to a *path* — no use to a page on another scheme, which cannot be
+/// redirected back to. This is the same write without the round trip; the tree
+/// reads it on its next render, and the caller repaints itself.
+pub fn set_theme<R: tauri::Runtime>(app: &AppHandle<R>, mode: ThemeMode) {
+    if let Some(jar) = app.try_state::<JarState>() {
+        jar.0.set("ts_theme", mode.as_str());
+    }
 }
 
 /// Drops a RootId from Recent — the row's own button, for a folder that moved or

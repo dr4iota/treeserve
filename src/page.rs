@@ -191,6 +191,23 @@ fn icon_lineno(on: bool) -> &'static str {
 }
 
 /// Wraps icon paths in an `<svg>` that inherits colour and text size.
+/// The theme flag's mark and the words under it: which setting is chosen, and
+/// what clicking does next.
+///
+/// Public because the flag is not only in this header any more — a shell that
+/// serves pages of its own beside the tree puts the same control on them, and
+/// three places showing one setting should be three places drawing one mark.
+pub fn theme_icon(mode: ThemeMode) -> (&'static str, &'static str) {
+    match mode {
+        ThemeMode::Auto => (
+            ICON_THEME_AUTO,
+            "Theme: following the system — click for light",
+        ),
+        ThemeMode::Light => (ICON_SUN, "Theme: light — click for dark"),
+        ThemeMode::Dark => (ICON_MOON, "Theme: dark — click to follow the system"),
+    }
+}
+
 pub fn svg_icon(paths: &str) -> String {
     format!(
         "<svg viewBox=\"0 0 16 16\" width=\"14\" height=\"14\" fill=\"none\" stroke=\"currentColor\" \
@@ -383,20 +400,13 @@ fn head_and_header(
             pane_title,
         ));
     }
-    let (theme_icon, theme_title) = match prefs.theme {
-        ThemeMode::Auto => (
-            ICON_THEME_AUTO,
-            "Theme: following the system — click for light",
-        ),
-        ThemeMode::Light => (ICON_SUN, "Theme: light — click for dark"),
-        ThemeMode::Dark => (ICON_MOON, "Theme: dark — click to follow the system"),
-    };
+    let (mark, why) = theme_icon(prefs.theme);
     controls.push_str(&flag(
         "",
         &set_href("theme", prefs.theme.next().as_str(), url_now),
-        &svg_icon(theme_icon),
+        &svg_icon(mark),
         &format!("Theme: {}", prefs.theme.as_str()),
-        theme_title,
+        why,
     ));
 
     // The shell's own chrome, and all of it: one button on the line the path and
