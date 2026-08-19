@@ -239,11 +239,12 @@ cargo run -p treesight -- [FOLDER]     # dev run
   it right away. **Started without one** — the normal double-click case, where
   the working directory is whatever the shell happened to pick — it opens a
   native folder picker instead of guessing; cancelling quits.
-- The server binds `127.0.0.1:0` (an OS-assigned port) and the window is
-  pointed at it, so cookies, redirects, Range requests and relative links work
-  exactly as in a browser. Because any local process could otherwise reach that
-  port, the server runs with a per-run token: the window's first navigation
-  exchanges it for a cookie via `/.ts/auth`, and requests without it get 403.
+- The window opens on `treesight://localhost/`, a URI scheme the app registers
+  and answers itself — no socket, no port, nothing for another process on the
+  machine to reach. Cookies, redirects, Range requests and relative links work
+  exactly as in a browser, because all of that belongs to the router rather
+  than to a server. The app does not build one: `tiny_http` is behind the
+  `http` feature, which only `treeserve` turns on.
 - **The left pane is also the folder chooser**, so choosing one looks the same on
   every platform — which the native dialogs do not, GTK offering *Other
   Locations* where Windows offers *Quick access* and no tree at all. The tree
@@ -335,12 +336,13 @@ cargo install tauri-cli --version "^2" --locked   # provides `cargo tauri`
 cargo binstall tauri-cli                          # or: prebuilt, much faster
 ```
 
-The server CLI is unaffected by all of this: it never sets a token, and its HTTP
-responses are byte-identical to the pre-workspace version.
+The server CLI is unaffected by all of this: its HTTP responses are
+byte-identical, which `scripts/snap.sh` is there to prove.
 
 ## Direct dependencies
 
-`tiny_http` (sync HTTP server), `syntect` + `two-face` (highlighting),
+`tiny_http` (sync HTTP server, `http` feature — the CLI only), `syntect` +
+`two-face` (highlighting),
 `comrak` (Markdown), `mermaid-rs-renderer` (Mermaid → SVG), `pulldown-latex`
 (LaTeX → MathML). Everything else —
 argument parsing, URL handling, templating, glob matching — is hand-rolled

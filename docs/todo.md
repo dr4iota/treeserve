@@ -80,24 +80,30 @@ here). The shell intercepts the link; this server never serves it.
 
 Off by default, so snapshot: **IDENTICAL**; add a page test with the bit set.
 
-## 3. Mobile-capable `run_with`
+## 3. Mobile-capable `run_with` — *gating done, the rest open*
 
-**Trigger:** downstream starts on mobile.
+Done: single-instance, `desktop_dir` and the folder picker are `#[cfg(desktop)]`;
+mobile roots at `app_data_dir()` (created on first use, empty to begin with) and
+Places lists **App storage** first. `cargo check --target aarch64-linux-android`
+passes for `treesight` and for the downstream shell. Snapshot: **IDENTICAL**.
 
-`treesight::run_with` assumes a desktop: the single-instance plugin, the folder
-picker as the empty-argv path, drag-and-drop, and the accelerator comments are
-all desktop concepts, and `tauri-plugin-single-instance` does not exist on
-mobile at all.
+Still open:
 
-- `#[cfg(desktop)]` the single-instance registration and the drag-drop hook; on
-  mobile skip the picker fallback, since the downstream app supplies its own
-  landing root or page through its extensions.
-- Confirm `treesight` compiles as a lib for `aarch64-linux-android` and
-  `aarch64-apple-ios` once gated (`cargo check --target …`, which needs the NDK
-  / Xcode toolchains — coordinate on SDK setup).
+- `aarch64-apple-ios` is unconfirmed — it needs macOS and Xcode.
+- No folder picker on mobile. `ask_for_folder` says so rather than doing it.
+  Choosing a directory means a per-directory grant: `ACTION_OPEN_DOCUMENT_TREE`
+  plus `takePersistableUriPermission` on Android, `UIDocumentPickerViewController`
+  plus a security-scoped bookmark on iOS. Both hand back a `content://` URI or a
+  scoped URL, **not a path**, so the backend is a new `Vfs` — which is the seam
+  that already exists — and not a tweak to `LocalFs`. Android needs a small
+  Kotlin Tauri plugin; there is no first-class one.
+- An offline cache belongs in `app_data_dir()`, never `app_cache_dir()`: the
+  cache directory is purgeable on both platforms, and a cache the user is
+  relying on offline would evaporate exactly when the phone fills up. On iOS set
+  `isExcludedFromBackup` on it, or a mirrored tree inflates the user's iCloud
+  backup — which Apple's storage guidelines treat as a review matter.
 - Whatever else the first real mobile build trips over belongs in this item.
-  Keep the diff cfg-gated so desktop output is untouched. Snapshot:
-  **IDENTICAL**.
+  Keep the diff cfg-gated so desktop output is untouched.
 
 ## 4. Publish `treeserve` to crates.io
 

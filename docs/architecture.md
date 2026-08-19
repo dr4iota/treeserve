@@ -26,42 +26,57 @@ The app (`app/src/main.rs`) is seven lines that call `treesight::run()`.
 `run()` is `run_with(generate_context!(), ShellExt::default())`; a second
 app supplies its own Tauri context and a [`ShellExt`](#shellext).
 
+One router, two faces. `handle(&State, &Req) -> Reply` decides every answer
+and touches nothing that carries it.
+
 ```
                     ┌─────────────────────────────────────────┐
-  treeserve CLI     │  tiny_http workers  →  HTML / raw bytes │
-  treeserve::spawn  │         ▲                               │
-                    │         │ Arc<dyn Vfs>  (LocalFs here)  │
+  treeserve CLI     │  handle(&State, &Req) -> Reply          │
+  http::spawn       │         ▲                               │
+  feature = "http"  │         │ Arc<dyn Vfs>  (LocalFs here)  │
                     └─────────┼───────────────────────────────┘
                               │
-  treesight window ─ loopback ┘   127.0.0.1:<os-port>
-       │                          ts_token cookie
+  treesight window ─ scheme ──┘   treesight://localhost
+       │                          http://treesight.localhost on Win/Android
        │  on_navigation intercepts /.ts/open, /.ts/root, …
        │  ShellExt.actions run first (downstream claims)
        └─ native dialogs, Recent file, Places, Save As
 ```
 
+The app links the router without the server: `default-features = false` drops
+`tiny_http` from its graph entirely. Nothing is listening on the app's side, so
+there is no address for another process on the machine to find — which is why
+there is no token, no cookie handshake and no origin to authenticate.
+
 ---
 
 ## Request path
 
-`spawn` binds `cfg.bind:cfg.port` (port `0` lets the OS pick) and starts
-`cfg.threads` worker threads. Each loop is `server.recv()` then `respond`.
-A panic in one request is caught; the worker stays up.
+Two callers reach the same router.
 
-`respond` (`src/lib.rs`) is GET-only and does, in order:
+`http::spawn` binds `cfg.bind:cfg.port` (port `0` lets the OS pick) and starts
+`cfg.threads` worker threads. Each loop is `server.recv()`, then `respond`,
+which is a four-line adapter: build a `Req`, call `handle`, write the `Reply`
+down the socket. A panic in one request is caught; the worker stays up.
+
+The shell registers `treesight` as a URI scheme and answers each webview
+request by calling `handle` directly, on a spawned thread — highlighting a
+large file would otherwise stop the window painting. A `Body::Stream` is read
+into bytes there, because a custom protocol answers with a body rather than a
+handle to pull on; the case that would hurt never arrives whole, since the
+webview asks for a film a Range at a time.
+
+`handle` (`src/lib.rs`) is GET-only and does, in order:
 
 1. Snapshot `cfg.root()` once for the whole request, so a re-root mid-render
    cannot paint a listing from one tree and a pane from another.
-2. If `cfg.token` is set: `/.ts/auth` mints the `ts_token` cookie and
-   redirects; any other request without that cookie is 403. The CLI leaves
-   `token` unset, so this is a no-op there.
-3. Compiled-in assets: `/.ts/app.css`, `/.ts/math.css`,
+2. Compiled-in assets: `/.ts/app.css`, `/.ts/math.css`,
    `/.ts/syntax-{light,dark}.css`. Preference cookies: `/.ts/set`.
-4. `/.ts/wait` — parking page while the shell probes a folder (`app_ui` only).
-5. `resolve_in_root` — percent-decode, reject `.` / `..` / NUL, then
+3. `/.ts/wait` — parking page while the shell probes a folder (`app_ui` only).
+4. `resolve_in_root` — percent-decode, reject `.` / `..` / NUL, then
    `Vfs::resolve` (symlink canonicalize + confinement). Missing → 404,
    outside the root → 403.
-6. Directories 301 to a trailing slash, then `page::listing_page`.
+5. Directories 301 to a trailing slash, then `page::listing_page`.
    Files: `?raw=` / `?dl=` / non-HTML / subresource (`Sec-Fetch-Dest`) go
    through `serve_raw` (Range, ETag). Otherwise `view::file_page`.
 
@@ -89,7 +104,8 @@ intended behaviour, not a limitation being tolerated.
 
 | file | job |
 |---|---|
-| `lib.rs` | `Config`, `Root`, `State`, `PaneSection` / `PaneEntry`, `spawn` / `respond`, token, Range, ETag, `root_id_is_local`, `leaf_of` |
+| `lib.rs` | `Config`, `Root`, `State`, `PaneSection` / `PaneEntry`, `Req` / `Reply` / `Body`, `handle`, `state_for`, Range, ETag, `root_id_is_local`, `leaf_of` |
+| `http.rs` | `feature = "http"` only: `Serving`, `spawn`, the worker loop, and the tiny_http ⇄ `Req`/`Reply` adapters. The one file that knows a socket exists |
 | `vfs.rs` | `Vfs`, `VfsPath`, `LocalFs`, `Meta`, `Entry`, `ResolveError` |
 | `page.rs` | Listing, tree pane, Places/Recent/sections, layout, wait/error pages, SVG icons |
 | `view.rs` | File page: media, PDF, markdown, mermaid files, highlighted source |
@@ -141,13 +157,16 @@ puts in `?path=`. For `LocalFs` that is `display_path` of the host path.
 
 ## treesight
 
-The window is a webview pointed at `http://127.0.0.1:<port>`. Cookies,
-redirects, Range and relative links are therefore ordinary HTTP.
+The window is a webview opened on `treesight://localhost/`, served by a URI
+scheme the shell registers and answers out of `handle`. Windows and Android
+hand a registered scheme to the webview as `http://treesight.localhost`
+instead; `scheme_base()` is the one place that knows the difference.
 
-Because that port is reachable by every process on the machine, the app
-sets a per-run token and opens on `/.ts/auth?t=…&back=/`. Every later
-re-root navigates through that handshake URL again (`Serving::entry`):
-going straight to `/` can beat the first request and land on 403.
+Cookies, redirects, Range and relative links all still work, because every one
+of them belongs to the router rather than to the socket that used to carry it.
+
+`Serving` holds the `Arc<State>` the router serves out of, and `Serving::entry`
+is now simply the served root — there is nothing to collect on the way in.
 
 ### What the server must not do
 
@@ -189,10 +208,13 @@ first, max 8, RootId strings. Opening a Place does not write Recent.
 
 The window may only stay on:
 
-1. The loopback origin (exact match on `url.origin()`, not a string prefix).
-2. `ShellExt.allowed_origins` — a scheme (`telesight:`) or an exact origin
-   (`http://telesight.localhost`, which is how Windows/Android serve custom
-   protocols).
+1. The shell's own pages, matched by `origin_allowed(shell_origins(), …)`.
+   Two forms, because a URL on a non-special scheme has an **opaque** origin:
+   `treesight://localhost` serializes to `"null"`, so that half matches by
+   scheme, and `http://treesight.localhost` matches as a whole origin. Never by
+   prefix — `http://treesight.localhost.evil.com` starts with the same text.
+2. `ShellExt.allowed_origins` — the same two forms, for a downstream scheme
+   (`telesight:`, `http://telesight.localhost`).
 
 Anything else opens in the system browser.
 
@@ -230,9 +252,12 @@ links on a row are raw hrefs (e.g. a terminal URL). A heading action is
 
 ## Security (local product)
 
-- Default bind `127.0.0.1`. The CLI can bind elsewhere; `app_ui` cannot be
-  turned on from the CLI.
-- Loopback token in the app; no token in the CLI.
+- The app opens no socket at all: it registers a scheme and calls the router.
+  There is no port for another local process to reach, and so nothing to
+  authenticate to. Authentication, TLS and anything in front of them belong to
+  `http.rs`, which the app does not compile.
+- Default bind `127.0.0.1` for the CLI, which can bind elsewhere; `app_ui`
+  cannot be turned on from the CLI.
 - Symlink escape → 403 for **navigation**.
 - No secrets in `recent.txt`. No `?password=` links.
 - Offline: no CDN, no webfonts, no telemetry. Syntax themes, mermaid,
@@ -244,11 +269,14 @@ links on a row are raw hrefs (e.g. a terminal URL). A heading action is
 ## Tests and snapshots
 
 `cargo test` (treeserve) and `cargo test -p treesight`. After treeserve
-changes, `cargo check --no-default-features --features pure` must still
-compile (fancy-regex instead of oniguruma; used by the static musl build).
+changes, two feature builds must still compile: `--no-default-features
+--features pure` (fancy-regex instead of oniguruma; used by the static musl
+build) and `--no-default-features --features onig` (no `http`, which is what
+the shell builds — it catches anything that has quietly grown a dependency on
+the server).
 
 `scripts/snap.sh` is the HTML/HTTP A/B harness: two servers over one
-fixture (CLI-shaped and `app_ui`+token). Capture before and after a
+fixture (CLI-shaped and `app_ui`). Capture before and after a
 change, `diff -r` the directories. Byte-identical refactors should diff
 empty; markup changes should contain only the intended delta.
 `examples/snapshot_server.rs` is the fixture server.
