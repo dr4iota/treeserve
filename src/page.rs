@@ -558,8 +558,10 @@ pub fn layout(
     content: &str,
 ) -> String {
     // The picker lives in the status line, which is always on screen — the pane
-    // that used to hold it is the first thing to go when the window narrows.
-    let pick = if state.cfg.app_ui {
+    // that used to hold it is the first thing to go when the window narrows. Only
+    // where there is a picker to open, though: a phone has none, and a button that
+    // cannot do the one thing it says is worse than no button.
+    let pick = if state.cfg.app_ui && state.cfg.picker {
         flag(
             "pick",
             "/.ts/open",
