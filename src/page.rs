@@ -684,14 +684,28 @@ fn pane_html(
     // left. Under a heading like the lists below it, because it is one more of
     // them — the difference being that this one is somewhere you are, so the
     // heading carries the way to be somewhere else instead.
+    // Both ends of having a folder open, on the heading of the thing that is open:
+    // another one, and none. They go together in a group so the bar stays a line
+    // with two ends — a heading at one and its controls at the other — rather than
+    // spreading three children evenly across it.
+    let mut acts = String::new();
+    if state.cfg.picker {
+        acts.push_str(&format!(
+            "<a class=\"secact\" href=\"/.ts/open\" title=\"Open Folder… (Ctrl+O)\">{}</a>",
+            svg_icon(ICON_FOLDER)
+        ));
+    }
+    if state.cfg.app_ui {
+        acts.push_str(&format!(
+            "<a class=\"secact\" href=\"/.ts/close\" title=\"Close this folder\">{}</a>",
+            svg_icon(ICON_CROSS)
+        ));
+    }
     out.push_str(&format!(
         "<section class=\"files\"><h2>Files{}</h2>",
-        match state.cfg.picker {
-            true => format!(
-                "<a class=\"secact\" href=\"/.ts/open\" title=\"Open Folder… (Ctrl+O)\">{}</a>",
-                svg_icon(ICON_FOLDER)
-            ),
-            false => String::new(),
+        match acts.is_empty() {
+            true => String::new(),
+            false => format!("<span class=\"acts\">{acts}</span>"),
         }
     ));
     tree_dir(
@@ -1505,6 +1519,41 @@ mod tests {
         let html = start_page(&state, prefs(), "/");
         assert!(!html.contains("href=\"/.ts/open\""), "{html}");
         assert!(html.contains("Open one of the places below"), "{html}");
+    }
+
+    /// Both ends of having a folder open, on the heading of what is open: another
+    /// folder, and none. The picker is a platform question and closing is not, so
+    /// the way out is there even where there is no way in.
+    #[test]
+    fn the_files_heading_offers_a_way_in_and_a_way_out() {
+        let dir = tmp_dir("files-acts");
+        let mut state = state_at(dir.clone());
+        let prefs = Prefs { sidebar: true, ..prefs() };
+        let page = |state: &State| {
+            let root = state.cfg.root().expect("these tests always serve one");
+            listing_page(state, &root, prefs, &[], &VfsPath::root(), &[], "/")
+        };
+
+        // A server with no shell around it has neither: the root is the one it was
+        // started on, and there is nothing here that could open or close one.
+        let html = page(&state);
+        assert!(!html.contains("/.ts/open"), "{html}");
+        assert!(!html.contains("/.ts/close"), "{html}");
+
+        state.cfg.app_ui = true;
+        let html = page(&state);
+        assert!(html.contains("href=\"/.ts/close\""), "a way out without a picker");
+        assert!(!html.contains("href=\"/.ts/open\""), "no picker on this platform");
+
+        state.cfg.picker = true;
+        let html = page(&state);
+        assert!(
+            html.contains("<span class=\"acts\"><a class=\"secact\" href=\"/.ts/open\""),
+            "{html}"
+        );
+        assert!(html.contains("href=\"/.ts/close\""), "{html}");
+
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     /// A remote listing says which machine it is from. `/home/hanhua` is a path

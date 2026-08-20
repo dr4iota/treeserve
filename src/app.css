@@ -200,6 +200,9 @@ nav.tree section h2:has(a.secact) {
   align-items: center;
   justify-content: space-between;
 }
+/* More than one action on a heading: they group at the far end together, so the
+   bar keeps two ends instead of spreading its children across the line. */
+nav.tree section h2 .acts { display: flex; align-items: center; gap: .35rem; }
 nav.tree section h2 a.secact {
   padding: 0 .1rem;
   line-height: 1;

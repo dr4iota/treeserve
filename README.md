@@ -245,8 +245,9 @@ cargo run -p treesight -- [FOLDER]     # dev run
 - **Nothing open is a state**, not a failure: `Config::root()` is an `Option`, the
   start page is what `handle` answers with while it is `None`, and any other path
   redirects there rather than erroring about a root that is not the point. The
-  pane's **Files** section — the tree and the folder picker on its heading — is
-  absent until there is a folder in it.
+  pane's **Files** section — the tree, with the folder picker and a Close on its
+  heading — is absent until there is a folder in it. Closing puts the window back
+  on the start page; what was open is in Recent, so nothing is lost by it.
 - The window opens on `treesight://localhost/`, a URI scheme the app registers
   and answers itself — no socket, no port, nothing for another process on the
   machine to reach. Cookies, redirects, Range requests and relative links work

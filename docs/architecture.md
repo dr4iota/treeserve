@@ -201,7 +201,8 @@ shell's capability:
   treesight sets it. There is no CLI flag — a flag plus `--bind 0.0.0.0`
   would be a remote-filesystem proxy.
 - The controls are ordinary links (`/.ts/open`, `/.ts/root`, `/.ts/place`,
-  `/.ts/back`, `/.ts/reload`, `/.ts/print`, `/.ts/forget`). **None of those is
+  `/.ts/back`, `/.ts/reload`, `/.ts/print`, `/.ts/forget`, `/.ts/close`).
+  **None of those is
   a server route**; the CLI 404s them. The shell's `on_navigation` cancels the
   navigation and does the work. `/.ts/set` and `/.ts/tree` are server routes the
   shell answers itself as well — see the cookie jar above.
@@ -257,8 +258,11 @@ letters or `/`). Recent is `recent.txt` in the app config dir, newest
 first, max 8, RootId strings. Opening a Place does not write Recent.
 
 The tree sits in a **Files** section, headed like Places and Recent, and that
-heading carries the folder picker — which the status line then shows only below
-50rem, where the pane has left the layout, so no width offers two. A section's
+heading carries both ends of having a folder open: the picker, and `/.ts/close`
+(`Config::close_root`) which puts the window back on the start page. What was
+open is in Recent, so there is nothing to confirm. The picker also appears in the
+status line, but only below 50rem where the pane has left the layout, so no width
+offers two — and only where `Config::picker` says the platform has one at all. A section's
 `heading_action` is `(href, icon, title)`: the mark is the embedder's, because a
 plus promises adding one thing and a list of servers is *managed*.
 

@@ -277,6 +277,13 @@ impl Config {
     /// The root's name goes with the root it named. A caller with a better one
     /// says so after this, which is the only way a name outlives a re-root — or
     /// the window would still be called after the folder before it.
+    /// Back to nothing open — the state the shell starts in, and the one the start
+    /// page is for. The root's name goes with the root, as on any re-root.
+    pub fn close_root(&self) {
+        self.set_root_name(None);
+        *self.root.write().expect("root lock") = None;
+    }
+
     pub fn set_root_vfs(&self, root: Root) {
         self.set_root_name(None);
         *self.root.write().expect("root lock") = Some(Arc::new(root));

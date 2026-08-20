@@ -1114,6 +1114,10 @@ fn percent_decode(s: &str) -> String {
 fn shell_action(app: &AppHandle, url: &tauri::Url) -> bool {
     match url.path() {
         "/.ts/open" => ask_for_folder(app.clone(), false),
+        // The other end of having a folder open. What was open is in Recent, so
+        // there is nothing to confirm; and a session an embedder opened for it is
+        // not this server's to close — the row that opened it will open it again.
+        "/.ts/close" => close_folder(app),
         "/.ts/back" => eval(app, "history.back()"),
         // The Refresh flag. A link to the page it is on would have done the same
         // work on the server and cost the reader their place in it: a navigation
@@ -1226,6 +1230,19 @@ fn header(reply: &treeserve::Reply, name: &str) -> Option<String> {
         .iter()
         .find(|(k, _)| k.eq_ignore_ascii_case(name))
         .map(|(_, v)| v.clone())
+}
+
+/// Puts the window back on the start page.
+fn close_folder(app: &AppHandle) {
+    let Some(serving) = app.try_state::<Serving>() else {
+        return;
+    };
+    serving.state().cfg.close_root();
+    if let Some(win) = app.get_webview_window(WINDOW)
+        && let Ok(url) = serving.entry.parse()
+    {
+        let _ = win.navigate(url);
+    }
 }
 
 fn eval(app: &AppHandle, js: &str) {
